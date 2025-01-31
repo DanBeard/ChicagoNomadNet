@@ -19,7 +19,7 @@ Reticulum is a cryptography-based networking stack designed to create local and 
 
 ## Getting Started
 
-To join the Chicago mesh network, consider the following applications, listed from easiest to more advanced setups:
+To join the Chicago mesh network, consider the following applications
 
 1. **MeshChat**: A simple web based GUI powered by the Reticulum Network Stack. It can send and receive messages, files, and audio calls with peers over various mediums, including local networks and LoRa radio with an RNode. 
 
@@ -36,7 +36,7 @@ Follow these steps to connect to the Chicago mesh network:
 1. **Install MeshChat**:
    - Download and install MeshChat from the [official repository](https://github.com/liamcottle/reticulum-meshchat).
 
-2. **Configure TCP CLient Connection**:
+2. **Configure TCP Client Connection**:
    - Launch MeshChat and navigate to the "Interfaces" tab.
    - Add a new TCP interface with the following details:
      - **Name**: `Chicago Nomadnet`
@@ -64,10 +64,18 @@ Follow these steps to connect to the Chicago mesh network:
 ### Connecting via NomadNet
 
 1. **Install NomadNet**:
-   - Download and install NomadNet from the [official repository](https://github.com/markqvist/NomadNet).
+   - Download and install NomadNet from the [official repository](https://github.com/markqvist/NomadNet) or via pip like the example below:
+ ```sh
+# Install Nomad Network and dependencies
+pip install nomadnet
+
+# Run the client
+nomadnet
+ ```  
+
 
 2. **Change Config File**:
-   - with nomadnet turned ff change the reticulum config file at `~/.reticulum/config
+   - with nomadnet turned off change the reticulum config file at `~/.reticulum/config
    - Add this entry to the bottom of the file
 ```yaml
   [[Chicago Nomadnet TCP]]
@@ -83,7 +91,7 @@ Follow these steps to connect to the Chicago mesh network:
 
 
 3. **Configure Rnode**:
-   - with nomadnet turned ff change the reticulum config file at `~/.reticulum/config
+   - with nomadnet turned off change the reticulum config file at `~/.reticulum/config
    - Add this entry to the bottom of the file
    - We use the [popular Rnode Settings](https://github.com/markqvist/Reticulum/wiki/Popular-RNode-Settings) for the US region
 ```yaml 
