@@ -17,7 +17,7 @@ if "ZIM_AUTHKEY" not in os.environ or "ZIM_PATH" not in os.environ:
 
 # recommend mounting this as tmpfs for speed and to avoid wear from constant writing/deleting
 # for example `sudo nano /etc/tmpfiles.d/volatile-subfolder.conf` then ` /run/nomadfiles 0777 v v 1h -`  then `sudo systemd-tmpfiles --create` 
-file_storage_path = os.path.dirname(os.path.abspath(__file__)) + "/../files/tmp/" # where the tmp files are stoed on disk (don't forget trailing /)
+file_storage_path = os.path.expanduser("~/.nomadnetwork/storage/files/tmp/") # where the tmp files are stoed on disk (don't forget trailing /)
 file_url_path = "/file/tmp/" # where we link them to to download
 
 
@@ -105,6 +105,7 @@ def decode_content_by_mimetype(item, current_path, archive_idx, last_path=None, 
         
     return f"`F66d`[Click here to download {item.title}`:{file_url_path}{filename}]`f  " +\
         "\n Note: You may need to wait for up to 60 seconds before you can download it. This is a limitation of nomadnets refreshing logic" + \
+            "\nIf the download fails, try again in a few seconds. " + \
             f"\n This file is {size_str} bytes. Be mindful of your bandwidth!" +\
             f"\n\n`F44a`[<--Back`:/page/zr.mu`a={archive_idx}|p={last_path}]`f" if last_path is not None else "" 
     

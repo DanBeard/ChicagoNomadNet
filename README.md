@@ -54,7 +54,7 @@ Follow these steps to connect to the Chicago mesh network:
      - **Frequency**: `914875000` (914.875 MHz)
      - **Bandwidth**: `125 Khz`
      - **Transmit Power**: Check your hardware docs. For example on the T3-S3 I use 14 dBm 
-     - **Spreading Factor**: `9` 
+     - **Spreading Factor**: `8` 
      - **Coding Rate**: `5` 
 
 4. **Connect**:
@@ -102,7 +102,7 @@ nomadnet
     frequency = 914875000
     bandwidth = 125000
     txpower = 14
-    spreadingfactor = 9
+    spreadingfactor = 8
     codingrate = 5
     name = RnodeUSB
     selected_interface_mode = 1
@@ -126,6 +126,7 @@ Look at nodes in the "Announce" tab and pay attention to how nay hops away they 
 
 ### Explore
 
-The chicagonomad.net node  is connected to the internet and will route between a few other TCP interfaces. Watch the announce stream or browse Nomad network nodes, and have fun!
+The chicagonomad.net node is connected to the internet and will route between a few other TCP interfaces. Watch the announce stream or browse Nomad network nodes, and have fun!
+You can see the scripts that it hosts here in the repo. They include some projects and random tests. It's all MIT licensed, so copy it, host it, modiy it; make the world a cooler place!
 
 
