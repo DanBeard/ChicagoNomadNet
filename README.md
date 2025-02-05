@@ -21,7 +21,7 @@ Reticulum is a cryptography-based networking stack designed to create local and 
 
 To join the Chicago mesh network, consider the following applications
 
-1. **MeshChat**: A simple web based GUI powered by the Reticulum Network Stack. It can send and receive messages, files, and audio calls with peers over various mediums, including local networks and LoRa radio with an RNode. 
+1. **Reticulum MeshChat**: A simple web based GUI powered by the Reticulum Network Stack. It can send and receive messages, files, and audio calls with peers over various mediums, including local networks and LoRa radio with an RNode. 
 
 2. **NomadNet**: A command line user interface that enables messaging and hosting pages, apps and files for other users to download. 
 
@@ -31,13 +31,13 @@ To join the Chicago mesh network, consider the following applications
 
 Follow these steps to connect to the Chicago mesh network:
 
-### Connecting via Meshcat
+### Connecting via Reticulum MeshChat
 
-1. **Install MeshChat**:
-   - Download and install MeshChat from the [official repository](https://github.com/liamcottle/reticulum-meshchat).
+1. **Install Reticulum MeshChat**:
+   - Download and install Reticulum MeshChat from the [official repository](https://github.com/liamcottle/reticulum-meshchat).
 
 2. **Configure TCP Client Connection**:
-   - Launch MeshChat and navigate to the "Interfaces" tab.
+   - Launch Reticulum MeshChat and navigate to the "Interfaces" tab.
    - Add a new TCP interface with the following details:
      - **Name**: `Chicago Nomadnet`
      - **Type**: `TCPClientInterface`
@@ -45,7 +45,7 @@ Follow these steps to connect to the Chicago mesh network:
      - **Port**: `4242`
 
 3. **Configure Rnode**:
-   - Launch MeshChat and navigate to the "Interfaces" tab.
+   - Launch Reticulum MeshChat and navigate to the "Interfaces" tab.
    - We use the [popular Rnode Settings](https://github.com/markqvist/Reticulum/wiki/Popular-RNode-Settings) for the US region
    - Add a new Rnode interface with the following details:
      - **Name**: `Rnode`
@@ -58,7 +58,7 @@ Follow these steps to connect to the Chicago mesh network:
      - **Coding Rate**: `5` 
 
 4. **Connect**:
-   - Kill and restart meshchat after any configuration change
+   - Kill and restart Reticulum MeshChat after any configuration change
    - You should now be part of the Chicago mesh network and can start communicating with other members.
 
 ### Connecting via NomadNet
