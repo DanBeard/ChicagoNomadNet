@@ -31,10 +31,13 @@ def request_from_worker(archive, path):
         # default, just list archives
         if archive is None:
             resp = send_cmd(conn, "list_archives")
+            print("Below are Zim files in alphabetical order. Click on on to browse it. ")
+            # TODO pagination for smaller bandwidth like Lora
+            #print("They will be paginated (to accomidate slower connections) and images or other files can be downloaded through their /files/ links")
             print(">Archives")
             for archive in resp.get("archives",[]):
                 print(f"`F55a`[{archive['name']}`:/page/zr.mu`a={archive['id']}]`f")
-                print("")
+                #print("")
                 
         elif do_search and search is not None:
             resp = send_cmd(conn, "search", archive=archive, search=search, page=page)

@@ -6,6 +6,7 @@ from libzim.suggestion import SuggestionSearcher
 import traceback
 from urllib.parse import unquote
 from micronify import html_to_micron
+import sys
 
 # Env vars for privacy
 zimpath = os.environ["ZIM_PATH"] 
@@ -20,7 +21,7 @@ if "ZIM_AUTHKEY" not in os.environ or "ZIM_PATH" not in os.environ:
 file_storage_path = os.path.expanduser("~/.nomadnetwork/storage/files/tmp/") # where the tmp files are stoed on disk (don't forget trailing /)
 file_url_path = "/file/tmp/" # where we link them to to download
 
-
+DEFAULT_PAGE_SIZE_BYTES =  2**64 # Actually have pagination once we add styling for it
 archive_lookup = dict() # map from name to index id (we use numbers to save space/bandwidth in href rewrites)
 archives = []
 archive_names = []
@@ -68,14 +69,15 @@ def request_path(archive_idx, path, last_path):
     content = decode_content_by_mimetype(item, path, archive_idx, last_path=last_path)
     return {"status":"ok", "title":item.title, "content":content, "size": item.size, "mimetype": item.mimetype, "archive": {"name": archive_names[archive_idx], "id": archive_idx}  }
     
-def decode_content_by_mimetype(item, current_path, archive_idx, last_path=None, truncate_to=None):
+def decode_content_by_mimetype(item, current_path, archive_idx, pre_truncate=-1, last_path=None):
     """
     try to decode the content based on the mimetype
     """
     mimetype = item.mimetype
     content = bytes(item.content)
-    if truncate_to:
-        content = content[:truncate_to]
+    
+    if pre_truncate > 0:
+        content = content[:pre_truncate]
         
     if mimetype == "text/html":
         #TODO html to micron
@@ -130,8 +132,10 @@ def search(archive_idx, needle, page_idx, page_size):
     
     for path in result_pages:
         item = archive.get_entry_by_path(path).get_item()
-        # truncate content to save cycles
-        content = decode_content_by_mimetype(item, path, archive_idx, truncate_to=1024*8).strip()
+        # grab the page and pre-trnacte it to save cpu cycles on conversion
+        content = decode_content_by_mimetype(item, path, archive_idx, pre_truncate=5000).strip()
+        # truncate the result itself so we don't have HUGE results
+        content = content[:1000]
         
         results.append({"title":item.title, "content":content, "size": item.size, "mimetype": item.mimetype, "path": path})
     
@@ -163,7 +167,7 @@ def main_loop():
                 archive_id = int(msg.get("archive", -1))
                 search_str = msg.get("search", "no search?")
                 page = int(msg.get("page",0))
-                resp = search(archive_id, search_str, page, 10)
+                resp = search(archive_id, search_str, page, 5)
                 
             conn.send(resp)
             #print(resp)
