@@ -1,3 +1,7 @@
+# project specific
+tmp2/*
+storage
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

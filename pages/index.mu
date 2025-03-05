@@ -18,23 +18,23 @@ bat = psutil.sensors_battery()
 bat_stats= f"{int(bat.percent)}% plugged in" if bat.power_plugged else f"{int(bat.percent)}% discharging. {convertTime(bat.secsleft)} left"
 ram = psutil.virtual_memory()
 page=f"""
-                 ╷ ╷
-                 │ │                   Chicago Nomad
-                 ║ ║                                     
-                 ║ ║                   Apps (Work in progress) :                           
-                ▐███▌                    `F66d`[Offline zim backup of Wikipedia, Stackoverflow, & manuals`:/page/zr.mu]`f 
-                ▐███▌      │   │         Fully indexed for fast search. No internet? no problem!
-                ▐███▌      ╽   ╽         Have a zimfile you want me to backup? Message me! 
-               ▐█████▌     ┃   ┃
-               ▐█████▌     █████         LoRa locations: 
-         ▄██▄  ▐█████▌     █████           Grant Park 
-         ████ ▐███████▌    █████                      
-         ████ ▐███████▌   ▐█████▌          You nearby? let's mesh chicago up!
-       ▐██████▐███████▌   ▐█████▌             Freq: 914.875 Mhz, Bandwidth: 125 Khz, SF: 8
-       ▐██████▐████▐█████▌▐█████▌                  
-       ▐██████▐████▐█████▌███████                         
-    █████▌████▐████▐█████▌████▐████                     
-    █████▌████▐████▐█████▌████▐████                      
+               ╷ ╷
+               │ │                   Chicago Nomad
+               ║ ║                                     
+               ║ ║                   Apps (Work in progress) :                           
+              ▐███▌                    `F66d`[Offline zim of Wikipedia, Stackoverflow, & manuals`:/page/zr.mu]`f 
+              ▐███▌      │   │         QR code router at lxmf@109bcc2a640466a04b533134ba0d071d
+              ▐███▌      ╽   ╽              Send it an image LXMF QR code & it will send the message
+             ▐█████▌     ┃   ┃
+             ▐█████▌     █████         LoRa locations: 
+       ▄██▄  ▐█████▌     █████           Grant Park 
+       ████ ▐███████▌    █████                      
+       ████ ▐███████▌   ▐█████▌          You nearby? let's mesh chicago up!
+     ▐██████▐███████▌   ▐█████▌             Freq: 914.875 Mhz, Bandwidth: 125 Khz, SF: 8
+     ▐██████▐████▐█████▌▐█████▌                  
+     ▐██████▐████▐█████▌███████                         
+  █████▌████▐████▐█████▌████▐████                     
+  █████▌████▐████▐█████▌████▐████                      
  
 `c
   I'm still getting the hang of this reticulum thing. If you have any advice, let me know lxmf@8c3b233ce031f821e930b07cb0b07f52
