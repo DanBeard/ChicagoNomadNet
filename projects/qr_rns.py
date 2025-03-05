@@ -10,6 +10,9 @@ import os
 import numpy as np
 from LXMF import LXMessage, LXMRouter
 
+
+webcam_urls = ["https://cdns.abclocal.go.com/three/wls/webcam/StateSt_cap.jpg"]
+
 qreader = QReader()
 
 class TransparentDestination(RNS.Destination):
@@ -53,26 +56,30 @@ class QrRouter:
         self._msg_queue = []
         self._response_queue = []
         
+    def process_img(self, buf, reply_hash=None):
+        image = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return 0
+        
+        decoded_text = qreader.detect_and_decode(image=image)
+        num_sent = 0
+        for uri in decoded_text:
+            num_sent+=1
+            self.validate_and_enqueue_msg(uri, reply_hash)
+        return num_sent
+                    
     def on_rns_recv(self, message):        
         # DO STUFF WITH MESSAGE HERE
         reply_hash = message.source_hash
         has_attachment = message.fields is not None and len(message.fields) > 0
         if has_attachment:
-            files = [x[1] for x in message.fields.values() if len(x[1]) > 5]
-            # print(files)
+            files = [x[1] for x in message.fields.values() if len(x) > 0 and len(x[1]) > 5]
             num_sent = 0
             for f in files:
                 if type(f) == str:
                     f = f.encode()
                     
-                image = cv2.imdecode(np.frombuffer(f, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if image is None:
-                   continue
-               
-                decoded_text = qreader.detect_and_decode(image=image)
-                for uri in decoded_text:
-                    num_sent+=1
-                    self.validate_and_enqueue_msg(uri, reply_hash)
+            num_sent = self.process_img(f, reply_hash=reply_hash)
                     
             if num_sent == 0:
                 print("got attachment, but none were an image")
@@ -127,7 +134,7 @@ class QrRouter:
                     # requeue until we have a path
                     self._msg_queue.append((destination_hash, lxmf_data, ack_hash))
                   
-            # help que for responding with help to messages
+            # help queue for responding with help to messages
             r_q = self._response_queue
             self._response_queue = []
             for reply_hash, text in r_q:
@@ -140,6 +147,7 @@ class QrRouter:
                                     desired_method=LXMessage.OPPORTUNISTIC)
             
                     self.router.handle_outbound(lxm)
+                    print(" -> " + str(text))
                 else:
                     RNS.Transport.request_path(reply_hash)
                     self._response_queue.append((reply_hash, text))
@@ -153,20 +161,33 @@ class QrRouter:
                 
             await asyncio.sleep(2.5)
                     
-   
+import aiohttp
 class QrIngest:
     
-    def __init__(self, qr_router):
+    def __init__(self, qr_router: QrRouter):
         self.qr_router = qr_router
         
     async def run_ingest_loop(self):
+        await asyncio.sleep(2) # warmup time
         while True:
+            async with aiohttp.ClientSession() as sess:
+                for url in webcam_urls:
+                    cache_bust_url = url+"?cache_bust="+str(time.time())
+                    async with sess.get(cache_bust_url) as response:
+                        if response.ok:
+                            data = await response.read()
+                            num_sent = self.qr_router.process_img(data)
+                            if num_sent > 0:
+                                print("!!!Found QR code in: "+cache_bust_url)
+                            
+                        else:
+                            print("Bad status from "+ str(cache_bust_url))
+                            print(response.status)
+           
+                
             # grab new images to process from webcams or other streams
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)
                      
-    
-    
-    
 
 if __name__ == "__main__":
     # Get the image that contains the QR code
