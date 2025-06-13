@@ -113,13 +113,13 @@ class QrRouter:
         self._msg_queue.append((destination_hash, data_data, ack_hash))
             
     async def run_delivery_loop(self):
+        last_announce = 0
         while True:
             queue = self._msg_queue
             self._msg_queue = []
-            last_announce = time.time()
+        
             for destination_hash, lxmf_data, ack_hash in queue:
                 dest_id = RNS.Identity.recall(destination_hash)
-            
                 if dest_id is not None and RNS.Transport.has_path(destination_hash):
                     dest = TransparentDestination(dest_id, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
                     packet = RNS.Packet(dest, lxmf_data)
