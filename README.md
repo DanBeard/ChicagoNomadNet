@@ -52,9 +52,9 @@ Follow these steps to connect to the Chicago mesh network:
      - **Type**: `RnodeInterface`
      - **Port**: UsbSerial or Bluetooth port (e.g. /dev/ttyACM0)
      - **Frequency**: `914875000` (914.875 MHz)
-     - **Bandwidth**: `125 Khz`
+     - **Bandwidth**: `250 Khz`
      - **Transmit Power**: Check your hardware docs. For example on the T3-S3 I use 14 dBm 
-     - **Spreading Factor**: `8` 
+     - **Spreading Factor**: `7` 
      - **Coding Rate**: `5` 
 
 4. **Connect**:
@@ -100,9 +100,9 @@ nomadnet
     interface_enabled = true
     port = /path/to/usb/or/bluetooh/port
     frequency = 914875000
-    bandwidth = 125000
-    txpower = 14
-    spreadingfactor = 8
+    bandwidth = 250000
+    txpower = 20
+    spreadingfactor = 7
     codingrate = 5
     name = RnodeUSB
     selected_interface_mode = 1
