@@ -89,6 +89,14 @@ nomadnet
 
 ```
 
+If you'd prefer to use I2P to anonymously connect then use the I2P interface. (Slower but much more private. You must have an i2p daemon installed such as `i2pd`)
+```yaml
+[[I2P Chicago Nomad]]
+  type = I2PInterface
+  enabled = yes
+  connectable = yes
+  peers = fgtqx3pgwyd3bjcq4ojes47j7ynnw72luf2g3jeguhf5bbzkcuhq.b32.i2p
+```
 
 3. **Configure Rnode**:
    - with nomadnet turned off change the reticulum config file at `~/.reticulum/config
