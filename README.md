@@ -137,4 +137,51 @@ Look at nodes in the "Announce" tab and pay attention to how nay hops away they 
 The chicagonomad.net node is connected to the internet and will route between a few other TCP interfaces. Watch the announce stream or browse Nomad network nodes, and have fun!
 You can see the scripts that it hosts here in the repo. They include some projects and random tests. It's all MIT licensed, so copy it, host it, modiy it; make the world a cooler place!
 
+## Docker Quickstart (Self-Hosting)
+
+Run your own NomadNet node with offline ZIM archives (Wikipedia, StackOverflow, etc.) using Docker.
+
+### Prerequisites
+
+- Docker and Docker Compose
+- ZIM files from [Kiwix](https://wiki.kiwix.org/wiki/Content_in_all_languages) (e.g., `wikipedia_en_all_mini`)
+
+### Setup
+
+1. **Clone and enter the repository**:
+   ```sh
+   git clone https://github.com/DanBeard/ChicagoNomadNet.git
+   cd ChicagoNomadNet
+   ```
+
+2. **Create a `zim/` directory and add your ZIM files**:
+   ```sh
+   mkdir zim
+   # Download ZIM files from https://wiki.kiwix.org/wiki/Content_in_all_languages
+   # Place them in the zim/ directory
+   ```
+
+3. **Configure environment**:
+   ```sh
+   cp .env.example .env
+   # Edit .env and set a secure ZIM_AUTHKEY
+   ```
+
+4. **Build and run**:
+   ```sh
+   docker-compose up -d
+   ```
+
+5. **Connect to your node**:
+   - Add a TCP interface in your Reticulum config pointing to `localhost:4242`
+   - Or configure the `~/.reticulum/config` inside the container's volume for external connections
+
+### Configuration
+
+The container uses Docker volumes to persist configuration:
+- `nomadnet-config` - NomadNet settings and storage
+- `reticulum-config` - Reticulum identity and interfaces
+
+To customize Reticulum interfaces (TCP server, I2P, etc.), edit the config in the `reticulum-config` volume after first run.
+
 

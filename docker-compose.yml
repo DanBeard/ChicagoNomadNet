@@ -1,0 +1,17 @@
+services:
+  nomadnet:
+    build: .
+    environment:
+      - ZIM_PATH=/zim/
+      - ZIM_AUTHKEY=${ZIM_AUTHKEY:-changeme}
+    volumes:
+      - ./zim:/zim:ro                    # ZIM files (read-only)
+      - nomadnet-config:/root/.nomadnetwork
+      - reticulum-config:/root/.reticulum
+    ports:
+      - "4242:4242"                       # TCP interface
+    restart: unless-stopped
+
+volumes:
+  nomadnet-config:
+  reticulum-config:

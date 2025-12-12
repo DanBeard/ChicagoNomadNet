@@ -7,6 +7,11 @@ class MicronConverter(MarkdownConverter):
     reader_path = "/page/zr.mu" # so we can create valid micron links that will actually point where we want them to
     url_suffix=""
     
+    # Semantic colors for different link types (TUI convention)
+    COLOR_INTERNAL = "F0af"  # Cyan - internal wiki links
+    COLOR_EXTERNAL = "F94f"  # Magenta-ish - external HTTP links (can't follow)
+    COLOR_DOWNLOAD = "Ffa0"  # Yellow - images/downloads (bandwidth warning)
+
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = chomp(text)
         if not text:
@@ -24,7 +29,12 @@ class MicronConverter(MarkdownConverter):
             title = href
         #title_part = ' "%s"' % title.replace('"', r'\"') if title else ''
         micron_link = self.rewrite_link(href)
-        return '`F44a%s`[%s`%s]%s`f' % (prefix, text, micron_link, suffix) if href else text
+        # Choose color based on link type
+        if href and href.startswith("http"):
+            color = self.COLOR_EXTERNAL
+        else:
+            color = self.COLOR_INTERNAL
+        return '`%s%s`[%s`%s]%s`f' % (color, prefix, text, micron_link, suffix) if href else text
     
     
     def rewrite_link(self, link):
@@ -67,8 +77,18 @@ class MicronConverter(MarkdownConverter):
         href_workaround = any(x.name == "a" for x in el.children)
         prefix = "    \n" if href_workaround else ""
         # prevent MemoryErrors in case of very large n
-        n = max(1, min(8, n))
-        return '\n>'*n + prefix + text + "\n"
+        n = max(1, min(6, n))
+
+        # Styled headers for visual hierarchy
+        if n == 1:
+            # H1: Bold with horizontal rules (like major sections)
+            return f"\n-\n`!{prefix}{text}`!\n-\n"
+        elif n == 2:
+            # H2: Bold (like subsections)
+            return f"\n`!{prefix}{text}`!\n"
+        else:
+            # H3+: Standard header markers
+            return '\n>' * n + prefix + text + "\n"
     
     def convert_hr(self, el, text, convert_as_inline):
         return '\n-\n'
@@ -85,11 +105,86 @@ class MicronConverter(MarkdownConverter):
             label = alt
         else:
             label = src
-        return '`F44a`[(🖻:%s)`%s]`f' % (label , new_src) 
+        # Yellow for downloads/images (bandwidth warning)
+        return '`%s`[(img:%s)`%s]`f' % (self.COLOR_DOWNLOAD, label, new_src) 
 
 
     convert_i = convert_em
-    
+    convert_strong = convert_b
+
+    # ===== LIST SUPPORT =====
+    def convert_ul(self, el, text, convert_as_inline):
+        return '\n' + text + '\n'
+
+    def convert_ol(self, el, text, convert_as_inline):
+        return '\n' + text + '\n'
+
+    def convert_li(self, el, text, convert_as_inline):
+        parent = el.parent.name if el.parent else None
+        text = text.strip()
+        if parent == 'ol':
+            # Count preceding li siblings to get index
+            index = len([s for s in el.previous_siblings if getattr(s, 'name', None) == 'li']) + 1
+            return f"  {index}. {text}\n"
+        return f"  * {text}\n"
+
+    # ===== TABLE SUPPORT =====
+    def convert_table(self, el, text, convert_as_inline):
+        # Tables are converted row by row, just wrap with newlines
+        return '\n' + text.strip() + '\n'
+
+    def convert_thead(self, el, text, convert_as_inline):
+        return text
+
+    def convert_tbody(self, el, text, convert_as_inline):
+        return text
+
+    def convert_tr(self, el, text, convert_as_inline):
+        # Cells are separated by | already, just add row terminator
+        cells = text.strip()
+        if cells:
+            # Check if this is a header row (contains th elements)
+            is_header = any(getattr(child, 'name', None) == 'th' for child in el.children)
+            row = f"| {cells} |"
+            if is_header:
+                # Add separator line after header
+                cell_count = cells.count('|') + 1
+                separator = '|' + '---|' * cell_count
+                return row + '\n' + separator + '\n'
+            return row + '\n'
+        return ''
+
+    def convert_th(self, el, text, convert_as_inline):
+        return f"`!{text.strip()}`! | "
+
+    def convert_td(self, el, text, convert_as_inline):
+        return f"{text.strip()} | "
+
+    # ===== CODE SUPPORT =====
+    def convert_code(self, el, text, convert_as_inline):
+        # Inline code
+        return f"`={text}`="
+
+    def convert_pre(self, el, text, convert_as_inline):
+        # Code block - preserve formatting
+        return f"\n`=\n{text.strip()}\n`=\n"
+
+    # ===== BLOCKQUOTE SUPPORT =====
+    def convert_blockquote(self, el, text, convert_as_inline):
+        lines = text.strip().split('\n')
+        quoted = '\n'.join(f"  | {line}" for line in lines)
+        return '\n' + quoted + '\n'
+
+    # ===== DEFINITION LIST SUPPORT =====
+    def convert_dl(self, el, text, convert_as_inline):
+        return '\n' + text + '\n'
+
+    def convert_dt(self, el, text, convert_as_inline):
+        return f"`!{text.strip()}`!\n"
+
+    def convert_dd(self, el, text, convert_as_inline):
+        return f"    {text.strip()}\n"
+
     def convert_soup(self, soup):
         self._clean_soup(soup)
         return super().convert_soup(soup)

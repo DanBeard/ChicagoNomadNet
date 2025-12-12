@@ -1,0 +1,7 @@
+.git
+*.md
+.env
+zim/
+projects/
+__pycache__/
+*.pyc
