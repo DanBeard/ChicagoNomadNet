@@ -22,8 +22,8 @@ file_storage_path = os.path.expanduser("~/.nomadnetwork/storage/files/tmp/") # w
 file_url_path = "/file/tmp/" # where we link them to to download
 
 # Page size in characters for content pagination (tuned for LoRa ~28.8kbps)
-# ~4KB is reasonable for slow links - about 1-2 seconds transfer time
-DEFAULT_PAGE_SIZE_CHARS = 4000
+# ~8KB is reasonable for slow links - about 2-3 seconds transfer time
+DEFAULT_PAGE_SIZE_CHARS = 8000
 archive_lookup = dict() # map from name to index id (we use numbers to save space/bandwidth in href rewrites)
 archives = []
 archive_names = []

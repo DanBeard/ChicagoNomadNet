@@ -96,9 +96,9 @@ def request_from_worker(archive, path):
             if total_pgs > 1:
                 print("\n-")
                 path_param = f"|p={path}" if path else ""
-                prev_link = f"`F0f0`[<< Prev`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg - 1}]`f" if has_prev else "        "
-                next_link = f"`F0f0`[Next >>`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg + 1}]`f" if has_next else "        "
-                print(f"`c{prev_link}    Page {current_pg + 1}/{total_pgs}    {next_link}`c")
+                prev_link = f"`F0f0`[Prev Page`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg - 1}]`f" if has_prev else "         "
+                next_link = f"`F0f0`[Next Page`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg + 1}]`f" if has_next else "         "
+                print(f"{prev_link}    Page {current_pg + 1}/{total_pgs}    {next_link}")
     except RuntimeError as e:
         print("End")
     except Exception as e:
