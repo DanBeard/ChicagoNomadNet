@@ -6,7 +6,8 @@ from multiprocessing.connection import Client
 archive = os.environ.get("var_a", None)
 path = os.environ.get("var_p", None)
 last_path = os.environ.get("var_L", None)
-page = int(os.environ.get("var_page", 0))
+page = int(os.environ.get("var_page", 0))  # search result page
+content_page = int(os.environ.get("var_cp", 0))  # content pagination
 search = os.environ.get("field_search", None)
 do_search = int(os.environ.get("var_do_search", "0")) > 0
 
@@ -68,17 +69,36 @@ def request_from_worker(archive, path):
             
         # if we have an archive, then grab the path and display it
         else:
-            resp = send_cmd(conn, "request_path", archive=archive, path=path, last_path=last_path)
+            resp = send_cmd(conn, "request_path", archive=archive, path=path, last_path=last_path, content_page=content_page)
             archive_name = resp.get("archive",{}).get("name","archive name")
             archive_id =  resp.get("archive",{}).get("id",0)
             search_str = search if search is not None else ""
+            pagination = resp.get("pagination", {})
+            current_pg = pagination.get("page", 0)
+            total_pgs = pagination.get("total_pages", 1)
+            has_next = pagination.get("has_next", False)
+            has_prev = pagination.get("has_prev", False)
+
             # header
             print(f"`[Home`:/page/index.mu]                  `[{archive_name}`:/page/zr.mu`a={archive_id}]                  "+
                   f"`B444`<16|search`{search_str}>`b `[Search`:/page/zr.mu`search|do_search=1|a={archive_id}]               " +
                   (f"`F44a`[<--Back`:/page/zr.mu`a={archive_id}|p={last_path}]`f" if last_path is not None else " ")
                   )
             print(f"-\n")
+
+            # Show page indicator if multi-page
+            if total_pgs > 1:
+                print(f"`cPage {current_pg + 1} of {total_pgs}`c\n")
+
             print(resp.get("content","nocontent"))
+
+            # Pagination controls at bottom
+            if total_pgs > 1:
+                print("\n-")
+                path_param = f"|p={path}" if path else ""
+                prev_link = f"`F0f0`[<< Prev`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg - 1}]`f" if has_prev else "        "
+                next_link = f"`F0f0`[Next >>`:/page/zr.mu`a={archive_id}{path_param}|cp={current_pg + 1}]`f" if has_next else "        "
+                print(f"`c{prev_link}    Page {current_pg + 1}/{total_pgs}    {next_link}`c")
     except RuntimeError as e:
         print("End")
     except Exception as e:

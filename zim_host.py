@@ -21,10 +21,56 @@ if "ZIM_AUTHKEY" not in os.environ or "ZIM_PATH" not in os.environ:
 file_storage_path = os.path.expanduser("~/.nomadnetwork/storage/files/tmp/") # where the tmp files are stoed on disk (don't forget trailing /)
 file_url_path = "/file/tmp/" # where we link them to to download
 
-DEFAULT_PAGE_SIZE_BYTES =  2**64 # Actually have pagination once we add styling for it
+# Page size in characters for content pagination (tuned for LoRa ~28.8kbps)
+# ~4KB is reasonable for slow links - about 1-2 seconds transfer time
+DEFAULT_PAGE_SIZE_CHARS = 4000
 archive_lookup = dict() # map from name to index id (we use numbers to save space/bandwidth in href rewrites)
 archives = []
 archive_names = []
+
+def paginate_content(content, page_idx, page_size=DEFAULT_PAGE_SIZE_CHARS):
+    """
+    Paginate content by character count, trying to break at clean boundaries.
+    Returns (page_content, total_pages, has_next, has_prev)
+    """
+    if len(content) <= page_size:
+        # Content fits in one page
+        return content, 1, False, False
+
+    # Calculate total pages
+    total_pages = (len(content) + page_size - 1) // page_size
+
+    # Clamp page index
+    page_idx = max(0, min(page_idx, total_pages - 1))
+
+    # Calculate start position
+    start = page_idx * page_size
+    end = start + page_size
+
+    # Try to find a clean break point (paragraph, section, or sentence)
+    if end < len(content):
+        # Look for break points in the last 20% of the page
+        search_start = end - (page_size // 5)
+        search_region = content[search_start:end]
+
+        # Priority: double newline (paragraph) > single newline > period+space
+        break_points = [
+            search_region.rfind('\n\n'),
+            search_region.rfind('\n'),
+            search_region.rfind('. '),
+        ]
+
+        for bp in break_points:
+            if bp > 0:
+                end = search_start + bp + (2 if bp == break_points[0] else 1)
+                break
+
+    page_content = content[start:end]
+    has_prev = page_idx > 0
+    has_next = page_idx < total_pages - 1
+
+    return page_content, total_pages, has_next, has_prev
+
 
 def load(zimfile_path):
     """
@@ -41,15 +87,15 @@ def load(zimfile_path):
             archive_lookup[name] = i
             i+=1
 
-def request_path(archive_idx, path, last_path):
+def request_path(archive_idx, path, last_path, content_page=0):
     if archive_idx >= len(archives) or archive_idx <0:
         return {"status": "error", "message":f"could not find archive {archive_idx}"}
-    
+
     archive = archives[archive_idx]
     # archive = archive_lookup.get(archive_name, None)
     # if archive is None:
     #     return {"status": "error", "message":f"could not find archive {archive_name}"}
-    
+
     entry = archive.main_entry
     if path is not None and len(path) > 0:
         path = unquote(path) # unquote the path for dealing with uincode and stuff
@@ -57,17 +103,34 @@ def request_path(archive_idx, path, last_path):
             # is it just a trailing slash issue?
             if archive.has_entry_by_path(path+"/"):
                 path = path+"/"
-            else: 
+            else:
                 return {"status": "error", "message":f"could not find path {path} in {archive_idx}"}
         entry = archive.get_entry_by_path(path)
-        
+
     item = entry.get_item()
     if path is None:
         path = item.path # fill in path for main entry
         print("PATH="+path)
 
-    content = decode_content_by_mimetype(item, path, archive_idx, last_path=last_path)
-    return {"status":"ok", "title":item.title, "content":content, "size": item.size, "mimetype": item.mimetype, "archive": {"name": archive_names[archive_idx], "id": archive_idx}  }
+    full_content = decode_content_by_mimetype(item, path, archive_idx, last_path=last_path)
+
+    # Paginate the content
+    content, total_pages, has_next, has_prev = paginate_content(full_content, content_page)
+
+    return {
+        "status": "ok",
+        "title": item.title,
+        "content": content,
+        "size": item.size,
+        "mimetype": item.mimetype,
+        "archive": {"name": archive_names[archive_idx], "id": archive_idx},
+        "pagination": {
+            "page": content_page,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_prev": has_prev,
+        }
+    }
     
 def decode_content_by_mimetype(item, current_path, archive_idx, pre_truncate=-1, last_path=None):
     """
@@ -161,7 +224,8 @@ def main_loop():
                 archive_id = int(msg.get("archive", -1))
                 path = msg.get("path", None) # path requested
                 last_path = msg.get("last_path",None)
-                resp = request_path(archive_id, path, last_path)
+                content_page = int(msg.get("content_page", 0))
+                resp = request_path(archive_id, path, last_path, content_page)
                 #print(resp.get("content","?"))
             elif command == "search":
                 archive_id = int(msg.get("archive", -1))
