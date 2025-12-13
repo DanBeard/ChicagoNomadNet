@@ -1,6 +1,8 @@
 # project specific
 tmp2/*
 storage
+models/
+chromadb_data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

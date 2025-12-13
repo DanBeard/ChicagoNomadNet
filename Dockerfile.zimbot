@@ -1,0 +1,59 @@
+# Dockerfile for ZimBot - LXMF RAG Chatbot
+#
+# Builds a container with all dependencies for running the ZimBot
+# that provides AI-powered answers using ZIM archives
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=off \
+    ZIM_PATH=/zim \
+    ZIMBOT_MODEL_PATH=/models \
+    ZIMBOT_CHROMADB_PATH=/chromadb_data
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    libssl-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libffi-dev \
+    liblzma-dev \
+    libzim-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Copy application code
+COPY projects/zimbot /app/projects/zimbot
+COPY .env.example /app/.env.example
+
+# Create directories
+RUN mkdir -p /zim /models /chromadb_data /storage/zimbot
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Set working directory
+WORKDIR /app
+
+# Expose ports (if needed for debugging)
+EXPOSE 8000
+
+# Set the entrypoint
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["python", "-m", "projects.zimbot.zimbot"]

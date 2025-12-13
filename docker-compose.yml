@@ -12,6 +12,32 @@ services:
       - "4242:4242"                       # TCP interface
     restart: unless-stopped
 
+  zimbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.zimbot
+    environment:
+      - ZIM_PATH=/zim/
+      - ZIMBOT_MODEL_PATH=/models
+      - ZIMBOT_CHROMADB_PATH=/chromadb_data
+      - ZIMBOT_DISPLAY_NAME=${ZIMBOT_DISPLAY_NAME:-ZimBot}
+      - ZIMBOT_N_THREADS=${ZIMBOT_N_THREADS:-4}
+      - ZIMBOT_MAX_TOKENS=${ZIMBOT_MAX_TOKENS:-512}
+      - ZIMBOT_RETRIEVAL_K=${ZIMBOT_RETRIEVAL_K:-5}
+    volumes:
+      - ./zim:/zim:ro                    # ZIM files (read-only)
+      - ./models:/models                 # LLM models
+      - zimbot-chromadb:/chromadb_data  # ChromaDB persistent storage
+      - zimbot-storage:/storage/zimbot   # Bot identity storage
+    depends_on:
+      - nomadnet
+    restart: unless-stopped
+    # Uncomment for debugging
+    # ports:
+    #   - "8000:8000"
+
 volumes:
   nomadnet-config:
   reticulum-config:
+  zimbot-chromadb:
+  zimbot-storage:

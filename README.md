@@ -184,4 +184,93 @@ The container uses Docker volumes to persist configuration:
 
 To customize Reticulum interfaces (TCP server, I2P, etc.), edit the config in the `reticulum-config` volume after first run.
 
+## ZimBot - AI-Powered Knowledge Assistant
+
+ZimBot is an LXMF chatbot that uses Retrieval Augmented Generation (RAG) to answer questions using content from ZIM archives.
+
+### Features
+
+- **Offline AI Answers**: Uses local LLM models to provide answers without internet
+- **ZIM Archive Support**: Works with Wikipedia, StackOverflow, and other Kiwix archives
+- **Low-Bandwidth Optimized**: Designed for mesh networks with limited bandwidth
+- **LXMF Integration**: Fully compatible with Reticulum's LXMF messaging system
+
+### Requirements
+
+- GGUF format LLM model (e.g., Qwen2.5-1.5B-Instruct)
+- ZIM archives in the `zim/` directory
+- Docker setup as described above
+
+### Configuration
+
+ZimBot can be configured using environment variables:
+
+```env
+# Bot settings
+ZIMBOT_DISPLAY_NAME=ZimBot
+ZIMBOT_ANNOUNCE_INTERVAL=1800  # 30 minutes
+
+# Performance
+ZIMBOT_N_THREADS=4
+
+# AI settings
+ZIMBOT_MAX_TOKENS=512
+ZIMBOT_RETRIEVAL_K=5
+```
+
+### Usage
+
+Once running, you can interact with ZimBot via LXMF messages:
+
+- **Ask questions**: "What is quantum computing?"
+- **Commands**:
+  - `/help` - Show help message
+  - `/sources` - List available knowledge sources
+  - `/status` - Show bot status and statistics
+
+### Model Recommendations
+
+For best results, use one of these GGUF models:
+
+- **Qwen2.5-1.5B-Instruct** (~1GB, good quality)
+- **Qwen2.5-0.5B-Instruct** (~500MB, fast)
+- **TinyLlama-1.1B-Chat** (~700MB, decent quality)
+
+Download models from [Hugging Face](https://huggingface.co/) and place them in the `models/` directory.
+
+### Docker Service
+
+ZimBot runs as a separate service in the docker-compose setup:
+
+```yaml
+services:
+  zimbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.zimbot
+    volumes:
+      - ./zim:/zim:ro
+      - ./models:/models
+      - zimbot-chromadb:/chromadb_data
+      - zimbot-storage:/storage/zimbot
+```
+
+The service automatically:
+- Indexes ZIM archives on first run
+- Loads the LLM model
+- Announces itself on the network
+- Processes incoming questions
+
+### Development
+
+To run ZimBot locally for development:
+
+```sh
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the bot
+python -m projects.zimbot.zimbot
+```
+
 

@@ -1,0 +1,18 @@
+# ZimBot Dependencies
+# Core dependencies for the LXMF RAG Chatbot
+
+# Reticulum Network Stack (LXMF)
+RNS==0.6.0
+LXMF==0.3.0
+
+# AI/ML dependencies
+llama-cpp-python>=0.2.50
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# ZIM file handling
+libzim==0.1.0
+
+# Utility dependencies
+numpy>=1.21.0
+requests>=2.25.0
