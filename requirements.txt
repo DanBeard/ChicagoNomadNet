@@ -12,6 +12,7 @@ sentence-transformers>=2.2.0
 
 # ZIM file handling
 libzim==0.1.0
+zimscan>=0.1.0
 
 # Utility dependencies
 numpy>=1.21.0

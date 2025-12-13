@@ -139,7 +139,7 @@ Note: Responses may take a few seconds as I search through offline archives."""
     def _on_message_received(self, message: LXMessage):
         """Callback for when a message is received."""
         reply_hash = message.source_hash
-        content = message.content.strip()
+        content = message.content.decode().strip()
         
         print(f"Received message from {reply_hash.hex()}: {content}")
         
@@ -237,7 +237,7 @@ Note: Responses may take a few seconds as I search through offline archives."""
                 response = f"{rag_response.answer}"
                 
                 # Add processing info
-                response += f"\n\n(Processed in {rag_response.processing_time:.1f}s, {rag_response.tokens_used} tokens)"
+                response += f"\n\n({rag_response.processing_time:.1f}s, {rag_response.tokens_used} tkns)"
                 
                 self._response_queue.append((reply_hash, response))
                 processed_questions.append((reply_hash, question))

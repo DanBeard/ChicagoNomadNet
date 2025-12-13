@@ -132,22 +132,59 @@ def request_path(archive_idx, path, last_path, content_page=0):
         }
     }
     
+def looks_like_text(content, sample_size=1024):
+    """
+    Heuristically detect if content is likely text.
+    Checks for: valid UTF-8, no null bytes, mostly printable chars.
+    """
+    sample = content[:sample_size]
+
+    # Null bytes are a strong indicator of binary content
+    if b'\x00' in sample:
+        return False
+
+    # Try to decode as UTF-8
+    try:
+        decoded = sample.decode('UTF-8')
+        # Check that most characters are printable or whitespace
+        printable_count = sum(1 for c in decoded if c.isprintable() or c.isspace())
+        ratio = printable_count / len(decoded) if decoded else 0
+        return ratio > 0.85  # 85% printable threshold
+    except UnicodeDecodeError:
+        return False
+
+
 def decode_content_by_mimetype(item, current_path, archive_idx, pre_truncate=-1, last_path=None):
     """
     try to decode the content based on the mimetype
     """
     mimetype = item.mimetype
     content = bytes(item.content)
-    
+
     if pre_truncate > 0:
         content = content[:pre_truncate]
-        
+
+    # Handle None mimetype by attempting detection
+    if mimetype is None:
+        # Check file extension first for common text types
+        path_lower = current_path.lower()
+        if path_lower.endswith(('.html', '.htm')):
+            mimetype = "text/html"
+        elif path_lower.endswith(('.txt', '.md', '.rst', '.css', '.js', '.json', '.xml', '.csv')):
+            mimetype = "text/plain"
+        elif looks_like_text(content):
+            # Content-based detection as fallback
+            if content.lstrip().startswith((b'<!DOCTYPE', b'<html', b'<HTML', b'<?xml')):
+                mimetype = "text/html"
+            else:
+                mimetype = "text/plain"
+
     if mimetype == "text/html":
         #TODO html to micron
         html = content.decode("UTF-8")
         return html_to_micron(html, current_path, extra_get_params={"a":archive_idx})
     # just straight text decode anything else thats text/
-    if mimetype.startswith("text"):
+    if mimetype is not None and mimetype.startswith("text"):
         return content.decode("UTF-8", errors='ignore')
     
     # Can't turn it into a micron page, let the user download it

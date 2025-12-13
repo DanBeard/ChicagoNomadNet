@@ -74,6 +74,7 @@ class RAGEngine:
             source_info.append(f"[{i}] {archive}: {title}")
         
         sources_text = "\n".join(source_info) if source_info else "No specific sources"
+        context_content = "\n\n".join(context_chunks)
         
         # Build the system prompt
         system_prompt = f"""You are ZimBot, an AI assistant that answers questions using information from ZIM archives (offline Wikipedia, StackOverflow, etc.).
@@ -82,12 +83,14 @@ Answer the question based only on the provided context. If you don't know the an
 
 Provide concise answers suitable for low-bandwidth communication. Keep responses under {self.config.max_tokens} tokens.
 
+When you are done say: -End-
+
 Here is the relevant context:
 
 {sources_text}
 
 Context content:
-{"\n\n".join(context_chunks)}
+{context_content}
 
 Question: {question}
 
@@ -140,10 +143,10 @@ Answer:"""
             response = self.llm(
                 prompt=prompt,
                 max_tokens=self.config.max_tokens,
-                temperature=0.7,
+                temperature=0.5,
                 top_p=0.9,
                 echo=False,
-                stop=["\nQuestion:", "\nAnswer:", "Question:", "Answer:"]
+                stop=["\nQuestion:", "\nAnswer:", "Question:", "Answer:","-End-"]
             )
             
             llm_output = response['choices'][0]['text']
