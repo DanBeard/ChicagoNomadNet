@@ -24,33 +24,25 @@ class ZimBot:
     
     def __init__(self, config: Optional[ZimBotConfig] = None):
         self.config = config or get_config()
-        
-        # Initialize Reticulum and LXMF
-        self.rns = RNS.Reticulum()
-        self.router = LXMRouter(storagepath="./tmp_zimbot")
-        
-        # Set up identity
-        self.identity = self._setup_identity()
-        self.source = self.router.register_delivery_identity(
-            self.identity, 
-            display_name=self.config.display_name
-        )
-        
+
+        # RNS/LXMF initialized later (after indexing completes)
+        self.rns = None
+        self.router = None
+        self.identity = None
+        self.source = None
+
         # Initialize components
         self.indexer = ZIMIndexer(self.config)
         self.rag_engine = RAGEngine(self.config, self.indexer)
-        
+
         # State management
         self.is_ready = False
         self.is_indexing = False
         self.last_announce = 0
-        
+
         # Message queues
         self._msg_queue = []
         self._response_queue = []
-        
-        # Register callbacks
-        self.router.register_delivery_callback(self._on_message_received)
         
         # Help text
         self.help_text = f"""ZimBot - Offline AI Assistant
@@ -92,10 +84,10 @@ Note: Responses may take a few seconds as I search through offline archives."""
     async def _initialize_components(self):
         """Initialize all components (indexer, RAG engine, etc.)."""
         print("Initializing ZimBot components...")
-        
+
         # Initialize ChromaDB
         self.indexer.initialize_chroma()
-        
+
         # Load ZIM archives
         try:
             archive_names = self.indexer.load_archives()
@@ -103,12 +95,12 @@ Note: Responses may take a few seconds as I search through offline archives."""
         except Exception as e:
             print(f"Failed to load ZIM archives: {e}")
             archive_names = []
-        
-        # Index archives if needed
+
+        # Index archives if needed (do this BEFORE starting network)
         if archive_names:
             self.is_indexing = True
             print("Checking if indexing is needed...")
-            
+
             try:
                 indexing_result = self.indexer.index_archives()
                 if indexing_result:
@@ -120,7 +112,7 @@ Note: Responses may take a few seconds as I search through offline archives."""
                 traceback.print_exc()
             finally:
                 self.is_indexing = False
-        
+
         # Load LLM model
         try:
             self.rag_engine.load_model()
@@ -128,10 +120,25 @@ Note: Responses may take a few seconds as I search through offline archives."""
         except Exception as e:
             print(f"Failed to load LLM model: {e}")
             # Continue without model - bot can still provide basic functionality
-        
+
+        # Now initialize Reticulum and LXMF (after indexing is complete)
+        print("Initializing Reticulum network stack...")
+        self.rns = RNS.Reticulum()
+        self.router = LXMRouter(storagepath="./tmp_zimbot")
+
+        # Set up identity
+        self.identity = self._setup_identity()
+        self.source = self.router.register_delivery_identity(
+            self.identity,
+            display_name=self.config.display_name
+        )
+
+        # Register message callback
+        self.router.register_delivery_callback(self._on_message_received)
+
         self.is_ready = True
         print("ZimBot is ready!")
-        
+
         # Initial announcement
         self.router.announce(self.source.hash)
         self.last_announce = time.time()
