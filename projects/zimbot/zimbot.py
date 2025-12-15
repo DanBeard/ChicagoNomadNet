@@ -102,7 +102,8 @@ Note: Responses may take a few seconds as I search through offline archives."""
             print("Checking if indexing is needed...")
 
             try:
-                indexing_result = self.indexer.index_archives()
+                # Use threaded indexer for better performance
+                indexing_result = self.indexer.index_archives_threaded()
                 if indexing_result:
                     print("Indexing completed successfully.")
                 else:
