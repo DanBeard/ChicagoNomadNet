@@ -3,7 +3,8 @@ tmp2/*
 storage
 models/
 chromadb_data/
-
+test_zim/
+tmp_zimbot/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

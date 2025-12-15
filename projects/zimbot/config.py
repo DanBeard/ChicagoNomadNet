@@ -39,6 +39,7 @@ class ZimBotConfig:
 
     # Threading/Indexer Settings
     indexer_workers: int = int(os.getenv("ZIMBOT_INDEXER_WORKERS", "4"))
+    indexer_readers: int = int(os.getenv("ZIMBOT_INDEXER_READERS", "1"))  # Start with 1 for safety
     raw_queue_size: int = int(os.getenv("ZIMBOT_RAW_QUEUE_SIZE", "500"))
     chunk_queue_size: int = int(os.getenv("ZIMBOT_CHUNK_QUEUE_SIZE", "2000"))
     embed_batch_size: int = int(os.getenv("ZIMBOT_EMBED_BATCH_SIZE", "256"))

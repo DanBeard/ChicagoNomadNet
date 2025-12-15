@@ -19,7 +19,10 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from sentence_transformers import SentenceTransformer
-import zimscan
+
+# zimfast is required - no fallback to slow zimscan
+# Installed as standalone module via: pip install -e projects/zimbot/zimfast/
+from zimfast import ZimReader as ZimFastReader
 
 from .config import ZimBotConfig
 
@@ -298,9 +301,9 @@ class ZIMIndexer:
             print(f"  Deleted documents for archive: {archive_name}")
         except Exception as e:
             print(f"  Failed to delete documents for {archive_name}: {e}")
-    
-    def index_archives(self, force_reindex: bool = False) -> bool:
-        """Index all loaded archives into ChromaDB with selective reindexing."""
+
+    def index_archives_simple(self, force_reindex: bool = False) -> bool:
+        """Simple single-threaded indexing using zimfast. No threading complexity."""
         if not self.archive_paths:
             print("No archives loaded to index.")
             return False
@@ -309,9 +312,7 @@ class ZIMIndexer:
         new_archives, changed_archives, removed_archives = self._get_changed_archives()
 
         if force_reindex:
-            # Force reindex all archives
             archives_to_index = set(self.archive_names)
-            # Delete all documents
             if self.collection:
                 try:
                     self.collection.delete(where={})
@@ -325,7 +326,6 @@ class ZIMIndexer:
                 print("All archives unchanged, skipping reindexing.")
                 return False
 
-            # Delete documents for changed and removed archives
             for archive_name in changed_archives | removed_archives:
                 self._delete_archive_documents(archive_name)
 
@@ -337,115 +337,201 @@ class ZIMIndexer:
             print(f"Removed archives: {', '.join(sorted(removed_archives))}")
 
         if not archives_to_index:
-            # Only removals, no indexing needed
             self._store_archive_hashes()
             print("Indexing complete (removals only).")
             return True
 
-        print(f"Indexing {len(archives_to_index)} archive(s)...")
+        # Load embedding model
+        if self.model is None:
+            print(f"Loading embedding model: {self.config.embedding_model}")
+            self.model = SentenceTransformer(self.config.embedding_model)
+            print("Model loaded.")
 
-        total_chunks = 0
+        print(f"Indexing {len(archives_to_index)} archive(s)...")
 
         for i, filepath in enumerate(self.archive_paths):
             archive_name = self.archive_names[i]
-
             if archive_name not in archives_to_index:
-                continue  # Skip unchanged archives
+                continue
 
-            print(f"Processing: {archive_name}")
-
-            entry_count = 0
-            text_count = 0
-            documents = []
-            metadatas = []
-            ids = []
-
-            try:
-                with zimscan.Reader(open(filepath, "rb"), skip_metadata=True) as reader:
-                    for record in reader:
-                        entry_count += 1
-
-                        # Determine mime type (detect if None)
-                        mime_type = record.mime_type
-                        content = None
-
-                        if mime_type and mime_type.startswith('text/'):
-                            # Known text type
-                            pass
-                        elif mime_type is None:
-                            # Try to detect from content
-                            content = record.read()
-                            mime_type = detect_mime_type(content, record.url or "")
-                            if mime_type is None:
-                                continue  # Not text content
-                        else:
-                            continue  # Non-text mime type
-
-                        text_count += 1
-
-                        try:
-                            if content is None:
-                                content = record.read()
-
-                            # Decode and extract text
-                            if mime_type == 'text/html':
-                                text = self._extract_text_from_html(
-                                    content.decode('UTF-8', errors='ignore'))
-                            else:
-                                text = content.decode('UTF-8', errors='ignore')
-
-                            if len(text) <= 50:
-                                continue
-
-                            # Chunk and add to batch
-                            chunks = self._chunk_text(text, self.config.chunk_size,
-                                                      self.config.chunk_overlap)
-
-                            for chunk_idx, chunk in enumerate(chunks):
-                                doc_id = f"{archive_name}_{text_count}_{chunk_idx}"
-                                documents.append(chunk)
-                                metadatas.append({
-                                    "archive": archive_name,
-                                    "path": record.url or "",
-                                    "title": record.title or "",
-                                    "mimetype": mime_type,
-                                    "chunk": chunk_idx,
-                                    "total_chunks": len(chunks)
-                                })
-                                ids.append(doc_id)
-
-                                # Batch insert to ChromaDB
-                                if len(documents) >= 100:
-                                    self.collection.add(
-                                        documents=documents,
-                                        metadatas=metadatas,
-                                        ids=ids
-                                    )
-                                    total_chunks += len(documents)
-                                    documents, metadatas, ids = [], [], []
-
-                        except Exception as e:
-                            continue  # Skip bad entries
-
-                        # Progress every 10k entries
-                        if entry_count % 10000 == 0:
-                            print(f"  {entry_count} entries, {text_count} text...")
-
-            except Exception as e:
-                print(f"Failed to scan {archive_name}: {e}")
-                raise
-
-            # Add remaining documents
-            if documents:
-                self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
-                total_chunks += len(documents)
-
-            print(f"  Done: {entry_count} entries, {text_count} text")
+            self._index_single_archive_simple(filepath, archive_name)
 
         self._store_archive_hashes()
-        print(f"Indexing complete. Total chunks: {total_chunks}")
+        print("All indexing complete.")
         return True
-    
+
+    def _index_single_archive_simple(self, filepath: str, archive_name: str):
+        """Index a single archive - simple sequential loop."""
+        import sys
+        import os
+        debug = os.environ.get('ZIMBOT_DEBUG', '0') == '1'
+
+        def dbg(msg):
+            if debug:
+                print(f"  [DBG] {msg}", flush=True)
+
+        print(f"Processing: {archive_name}", flush=True)
+
+        reader = ZimFastReader(filepath)
+        total_entries = reader.entry_count()
+        print(f"  Total entries: {total_entries}", flush=True)
+
+        documents = []
+        metadatas = []
+        ids = []
+        total_chunks = 0
+        text_count = 0
+        last_report = time.time()
+
+        for idx in range(total_entries):
+            # Progress every 10 seconds
+            now = time.time()
+            if now - last_report >= 10:
+                pct = idx / total_entries * 100
+                print(f"  [{pct:.1f}%] Entry {idx}/{total_entries}, "
+                      f"{text_count} text, {total_chunks} chunks", flush=True)
+                last_report = now
+
+            # Get entry
+            dbg(f"idx={idx}: get_entry")
+            result = reader.get_entry(idx)
+            if result is None:  # Redirect or error
+                continue
+
+            dbg(f"idx={idx}: unpack tuple")
+            path, title, content, mime_type = result
+
+            # Skip non-text
+            if mime_type and not mime_type.startswith('text/'):
+                continue
+
+            # Detect mime type if not set
+            if not mime_type:
+                mime_type = detect_mime_type(content, path or "")
+                if mime_type is None:
+                    continue
+
+            text_count += 1
+            dbg(f"idx={idx}: text entry #{text_count}, path={path[:50]}, size={len(content)}, mime={mime_type}")
+
+            # Extract text
+            try:
+                dbg(f"idx={idx}: decode content")
+                if mime_type == 'text/html':
+                    text = self._extract_text_from_html(
+                        content.decode('UTF-8', errors='ignore'))
+                else:
+                    text = content.decode('UTF-8', errors='ignore')
+
+                dbg(f"idx={idx}: decoded text len={len(text)}")
+
+                if len(text) <= 50:
+                    continue
+
+                # Chunk
+                dbg(f"idx={idx}: chunking")
+                chunks = self._chunk_text(text, self.config.chunk_size,
+                                          self.config.chunk_overlap)
+                dbg(f"idx={idx}: got {len(chunks)} chunks")
+
+                for chunk_idx, chunk_text in enumerate(chunks):
+                    doc_id = f"{archive_name}_{idx}_{chunk_idx}"
+                    documents.append(chunk_text)
+                    metadatas.append({
+                        "archive": archive_name,
+                        "path": path or "",
+                        "title": title or "",
+                        "mimetype": mime_type,
+                        "chunk": chunk_idx,
+                        "total_chunks": len(chunks)
+                    })
+                    ids.append(doc_id)
+
+                dbg(f"idx={idx}: batch size now {len(documents)}")
+
+                # Batch insert when we have enough
+                if len(documents) >= self.config.embed_batch_size:
+                    dbg(f"idx={idx}: ADDING BATCH TO CHROMA ({len(documents)} docs)")
+                    self._add_batch_to_chroma(documents, metadatas, ids)
+                    dbg(f"idx={idx}: batch added successfully")
+                    total_chunks += len(documents)
+                    documents, metadatas, ids = [], [], []
+
+            except Exception as e:
+                dbg(f"idx={idx}: EXCEPTION: {e}")
+                continue  # Skip bad entries
+
+        # Final batch
+        if documents:
+            self._add_batch_to_chroma(documents, metadatas, ids)
+            total_chunks += len(documents)
+
+        print(f"  Done: {text_count} text entries, {total_chunks} chunks indexed")
+
+    def _add_batch_to_chroma(self, documents: List[str], metadatas: List[dict], ids: List[str]):
+        """Add a batch of documents to ChromaDB with pre-computed embeddings."""
+        import os
+        debug = os.environ.get('ZIMBOT_DEBUG', '0') == '1'
+
+        if debug:
+            print(f"    [BATCH] Starting batch of {len(documents)} docs", flush=True)
+            print(f"    [BATCH] Doc lengths: min={min(len(d) for d in documents)}, max={max(len(d) for d in documents)}, avg={sum(len(d) for d in documents)//len(documents)}", flush=True)
+
+        # Pre-compute embeddings
+        if debug:
+            print(f"    [BATCH] Calling model.encode()...", flush=True)
+
+        embeddings = self.model.encode(
+            documents,
+            batch_size=64,
+            show_progress_bar=False,
+            normalize_embeddings=True
+        )
+
+        if debug:
+            print(f"    [BATCH] model.encode() done, shape={embeddings.shape}", flush=True)
+
+        # Convert embeddings to list
+        embeddings_list = embeddings.tolist()
+
+        if debug:
+            print(f"    [BATCH] Calling collection.add() one at a time...", flush=True)
+            # Add ONE AT A TIME to find exact crash point
+            for i in range(len(documents)):
+                doc = documents[i]
+                emb = embeddings_list[i]
+                meta = metadatas[i]
+                doc_id = ids[i]
+
+                # Check for suspicious content
+                has_null = '\x00' in doc
+                has_weird = any(ord(c) < 32 and c not in '\n\r\t' for c in doc)
+
+                print(f"    [ADD] {i}/{len(documents)}: id={doc_id[:40]}, len={len(doc)}, null={has_null}, weird={has_weird}, path={meta.get('path','')[:30]}", flush=True)
+
+                try:
+                    self.collection.add(
+                        documents=[doc],
+                        embeddings=[emb],
+                        metadatas=[meta],
+                        ids=[doc_id]
+                    )
+                except Exception as e:
+                    print(f"    [ADD] {i}: EXCEPTION: {e}", flush=True)
+                    raise
+
+            print(f"    [BATCH] All {len(documents)} docs added", flush=True)
+        else:
+            self.collection.add(
+                documents=documents,
+                embeddings=embeddings_list,
+                metadatas=metadatas,
+                ids=ids
+            )
+
+        if debug:
+            print(f"    [BATCH] collection.add() complete", flush=True)
+
     def search(self, query: str, k: int = 5) -> List[Dict]:
         """Search the indexed content."""
         if not self.collection:
@@ -492,85 +578,71 @@ class ZIMIndexer:
             self.model = SentenceTransformer(self.config.embedding_model)
             print("Model loaded.")
 
-    def _reader_thread(self, filepath: str, archive_name: str):
-        """Reader thread - sequential ZIM iteration (HDD-friendly)."""
-        entry_idx = 0
+    def _reader_thread_zimfast(self, filepath: str, archive_name: str,
+                                 start_idx: int, end_idx: int, reader_id: int):
+        """Reader thread using zimfast - reads a range of entries by cluster index."""
         text_entries = 0
         last_status = time.time()
-        print(f"  [Reader] Opening {filepath}...")
+        current_idx = start_idx
+
         try:
-            f = open(filepath, "rb")
-            print(f"  [Reader] File opened, creating zimscan.Reader...")
-            with zimscan.Reader(f, skip_metadata=True) as reader:
-                print(f"  [Reader] Reader created, starting iteration...")
-                for record in reader:
-                    # Debug first 20 entries or any entry that takes a while
-                    if entry_idx < 20:
-                        print(f"  [Reader] Entry {entry_idx}: mime={record.mime_type}, url={record.url[:50] if record.url else 'none'}")
+            reader = ZimFastReader(filepath)
+            print(f"  [Reader-{reader_id}] Started: indices {start_idx}-{end_idx}")
 
-                    if self.shutdown_event.is_set():
-                        break
+            for idx in range(start_idx, end_idx):
+                if self.shutdown_event.is_set():
+                    break
 
-                    # Determine mime type and read content
-                    mime_type = record.mime_type
-                    content = None
+                current_idx = idx
+                result = reader.get_entry(idx)
 
-                    # Early skip for clearly non-text types
-                    if mime_type and not mime_type.startswith('text/'):
-                        entry_idx += 1
+                if result is None:  # Redirect or error
+                    continue
+
+                path, title, content, mime_type = result
+
+                # Skip non-text content
+                if mime_type and not mime_type.startswith('text/'):
+                    continue
+
+                # Detect mime type if not set
+                if not mime_type:
+                    mime_type = detect_mime_type(content, path or "")
+                    if mime_type is None:
                         continue
 
-                    # Read content for detection or processing
-                    if entry_idx < 20:
-                        print(f"  [Reader] Entry {entry_idx}: calling record.read()...")
-                    content = record.read()
-                    if entry_idx < 20:
-                        print(f"  [Reader] Entry {entry_idx}: read {len(content)} bytes")
+                # Queue for processing
+                entry = RawEntry(
+                    content=content,
+                    mime_type=mime_type,
+                    url=path or "",
+                    title=title or "",
+                    archive_name=archive_name,
+                    entry_idx=idx
+                )
 
-                    if mime_type is None:
-                        # Detect mime type from content
-                        mime_type = detect_mime_type(content, record.url or "")
-                        if mime_type is None:
-                            entry_idx += 1
-                            continue
+                # Blocks if queue is full (backpressure)
+                self.raw_queue.put(entry)
+                text_entries += 1
 
-                    # Queue for processing
-                    entry = RawEntry(
-                        content=content,
-                        mime_type=mime_type,
-                        url=record.url or "",
-                        title=record.title or "",
-                        archive_name=archive_name,
-                        entry_idx=entry_idx
-                    )
+                if self.progress:
+                    with self.progress.lock:
+                        self.progress.entries_read += 1
 
-                    # Blocks if queue is full (backpressure)
-                    self.raw_queue.put(entry)
-                    text_entries += 1
-
-                    entry_idx += 1
-                    if self.progress:
-                        with self.progress.lock:
-                            self.progress.entries_read = entry_idx
-
-                    # Debug: confirm loop iteration completed
-                    if entry_idx < 25:
-                        print(f"  [Reader] Entry {entry_idx}: loop done, moving to next...")
-
-                    # Reader status every 10 seconds
-                    now = time.time()
-                    if now - last_status >= 10:
-                        print(f"  [Reader] {entry_idx} entries scanned, {text_entries} text, "
-                              f"queue: {self.raw_queue.qsize()}/{self.config.raw_queue_size}")
-                        last_status = now
+                # Status every 10 seconds
+                now = time.time()
+                if now - last_status >= 10:
+                    progress_pct = (idx - start_idx) / (end_idx - start_idx) * 100
+                    print(f"  [Reader-{reader_id}] {progress_pct:.1f}% ({idx}/{end_idx}), "
+                          f"{text_entries} text queued")
+                    last_status = now
 
         except Exception as e:
-            print(f"Reader error: {e}")
+            print(f"  [Reader-{reader_id}] Error at idx {current_idx}: {e}")
             import traceback
             traceback.print_exc()
         finally:
-            print(f"  [Reader] Done: {entry_idx} total entries, {text_entries} text entries queued")
-            self.reader_done.set()
+            print(f"  [Reader-{reader_id}] Done: {text_entries} text entries queued")
 
     def _worker_thread(self, worker_id: int):
         """Worker thread - text extraction and chunking."""
@@ -746,18 +818,34 @@ class ZIMIndexer:
         self.progress = ProgressTracker()
 
         print(f"Starting threaded indexing: {archive_name}")
-        print(f"  Workers: {self.config.indexer_workers}, "
+        print(f"  Readers: {self.config.indexer_readers}, "
+              f"Workers: {self.config.indexer_workers}, "
               f"Batch size: {self.config.embed_batch_size}")
 
-        # Start reader thread
-        reader = threading.Thread(
-            target=self._reader_thread,
-            args=(filepath, archive_name),
-            daemon=True
-        )
-        reader.start()
+        # Use zimfast with configurable number of readers
+        temp_reader = ZimFastReader(filepath)
+        total_entries = temp_reader.entry_count()
+        num_readers = self.config.indexer_readers
+        entries_per_reader = (total_entries + num_readers - 1) // num_readers
 
-        # Start worker pool
+        print(f"  Entries: {total_entries}, {num_readers} reader(s)")
+
+        readers = []
+        for i in range(num_readers):
+            start_idx = i * entries_per_reader
+            end_idx = min(start_idx + entries_per_reader, total_entries)
+            if start_idx >= total_entries:
+                break
+
+            r = threading.Thread(
+                target=self._reader_thread_zimfast,
+                args=(filepath, archive_name, start_idx, end_idx, i),
+                daemon=True
+            )
+            r.start()
+            readers.append(r)
+
+        # Start worker pool (text extraction + chunking)
         workers = []
         for i in range(self.config.indexer_workers):
             w = threading.Thread(
@@ -775,8 +863,11 @@ class ZIMIndexer:
         )
         embedder.start()
 
-        # Wait for reader to finish
-        reader.join()
+        # Wait for all readers to finish
+        for r in readers:
+            r.join()
+
+        self.reader_done.set()
 
         # Signal workers to finish (send sentinels)
         for _ in range(self.config.indexer_workers):
