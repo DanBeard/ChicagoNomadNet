@@ -2,22 +2,22 @@
 ZIM Indexer
 
 Handles loading ZIM archives, extracting text content, chunking, embedding,
-and storing in ChromaDB vector database.
+and storing in SQLite with sqlite-vec for vector similarity search.
 """
 
 import os
 import hashlib
 import json
 import re
+import struct
+import sqlite3
 import threading
 import queue
 import time
 from dataclasses import dataclass
 from typing import List, Dict, Set, Tuple, Optional
 
-import chromadb
-from chromadb.config import Settings
-from chromadb.utils import embedding_functions
+import sqlite_vec
 from sentence_transformers import SentenceTransformer
 
 # zimfast is required - no fallback to slow zimscan
@@ -118,13 +118,14 @@ def detect_mime_type(content: bytes, path: str = "") -> str | None:
 
 
 class ZIMIndexer:
-    """Main class for indexing ZIM archives into ChromaDB."""
+    """Main class for indexing ZIM archives into SQLite with sqlite-vec."""
+
+    # Embedding dimension for all-MiniLM-L6-v2
+    EMBEDDING_DIM = 384
 
     def __init__(self, config: ZimBotConfig):
         self.config = config
-        self.chroma_client = None
-        self.collection = None
-        self.embedding_function = None
+        self.conn: Optional[sqlite3.Connection] = None
         self.archive_paths: List[str] = []
         self.archive_names: List[str] = []
 
@@ -136,32 +137,49 @@ class ZIMIndexer:
         self.reader_done = threading.Event()
         self.workers_done = threading.Event()
         self.progress: Optional[ProgressTracker] = None
+        self._db_lock = threading.Lock()  # For thread-safe DB writes
         
     def initialize_chroma(self):
-        """Initialize ChromaDB client and collection."""
-        # Create directory if it doesn't exist
-        os.makedirs(self.config.chromadb_path, exist_ok=True)
-        
-        # Initialize ChromaDB client
-        self.chroma_client = chromadb.PersistentClient(
-            path=self.config.chromadb_path,
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
-        )
-        
-        # Set up embedding function
-        self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=self.config.embedding_model
-        )
-        
-        # Get or create collection
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="zim_content",
-            embedding_function=self.embedding_function,
-            metadata={"hnsw:space": "cosine"}
-        )
+        """Initialize SQLite database with sqlite-vec extension.
+
+        Note: Method name kept for backward compatibility, but now uses SQLite.
+        """
+        # Ensure parent directory exists
+        db_dir = os.path.dirname(self.config.sqlite_db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
+        # Initialize SQLite connection
+        self.conn = sqlite3.connect(self.config.sqlite_db_path, check_same_thread=False)
+        self.conn.enable_load_extension(True)
+        sqlite_vec.load(self.conn)
+        self.conn.enable_load_extension(False)
+
+        # Create tables
+        self.conn.executescript(f'''
+            -- Main documents table
+            CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                archive TEXT NOT NULL,
+                path TEXT,
+                title TEXT,
+                mimetype TEXT,
+                chunk INTEGER,
+                total_chunks INTEGER
+            );
+
+            -- Index for archive-based operations
+            CREATE INDEX IF NOT EXISTS idx_documents_archive ON documents(archive);
+
+            -- Virtual table for vector similarity search
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0(
+                doc_id TEXT PRIMARY KEY,
+                embedding float[{self.EMBEDDING_DIM}]
+            );
+        ''')
+        self.conn.commit()
+        print(f"SQLite database initialized: {self.config.sqlite_db_path}")
         
     def load_archives(self) -> List[str]:
         """Load ZIM archives from the configured path."""
@@ -246,27 +264,33 @@ class ZIMIndexer:
                 hashes[self.archive_names[i]] = hash_obj.hexdigest()
         return hashes
 
+    def _get_hash_file_path(self) -> str:
+        """Get path to store archive hashes (next to the SQLite DB)."""
+        db_path = self.config.sqlite_db_path
+        return db_path.replace('.db', '_hashes.json') if db_path.endswith('.db') else db_path + '_hashes.json'
+
     def _load_stored_hashes(self) -> Dict[str, str]:
         """Load stored per-archive hashes from disk."""
-        hash_file = os.path.join(self.config.chromadb_path, ".archive_hashes.json")
-        old_hash_file = os.path.join(self.config.chromadb_path, ".archive_hash")
+        hash_file = self._get_hash_file_path()
 
         if os.path.exists(hash_file):
             with open(hash_file, 'r') as f:
                 return json.load(f)
 
-        # Backward compatibility: if old single-hash file exists, return empty
-        # to trigger full reindex and migration to new format
+        # Check for old ChromaDB hash files and migrate
+        old_chromadb_path = "./chromadb_data"
+        old_hash_file = os.path.join(old_chromadb_path, ".archive_hashes.json")
         if os.path.exists(old_hash_file):
-            print("Migrating from single-hash to per-file hash format...")
-            os.remove(old_hash_file)
+            print("Migrating hash file from old ChromaDB location...")
+            with open(old_hash_file, 'r') as f:
+                return json.load(f)
 
         return {}
 
     def _store_archive_hashes(self):
         """Store per-archive hashes to disk."""
         current_hashes = self._get_archive_hashes()
-        hash_file = os.path.join(self.config.chromadb_path, ".archive_hashes.json")
+        hash_file = self._get_hash_file_path()
         with open(hash_file, 'w') as f:
             json.dump(current_hashes, f, indent=2)
 
@@ -294,11 +318,33 @@ class ZIMIndexer:
 
     def _delete_archive_documents(self, archive_name: str):
         """Delete all documents belonging to a specific archive."""
-        if not self.collection:
+        if not self.conn:
             return
         try:
-            self.collection.delete(where={"archive": archive_name})
-            print(f"  Deleted documents for archive: {archive_name}")
+            with self._db_lock:
+                # Get doc IDs to delete from vector table
+                cursor = self.conn.execute(
+                    "SELECT id FROM documents WHERE archive = ?",
+                    (archive_name,)
+                )
+                doc_ids = [row[0] for row in cursor.fetchall()]
+
+                # Delete from vector table
+                if doc_ids:
+                    placeholders = ','.join('?' * len(doc_ids))
+                    self.conn.execute(
+                        f"DELETE FROM vec_documents WHERE doc_id IN ({placeholders})",
+                        doc_ids
+                    )
+
+                # Delete from documents table
+                self.conn.execute(
+                    "DELETE FROM documents WHERE archive = ?",
+                    (archive_name,)
+                )
+                self.conn.commit()
+
+            print(f"  Deleted {len(doc_ids)} documents for archive: {archive_name}")
         except Exception as e:
             print(f"  Failed to delete documents for {archive_name}: {e}")
 
@@ -313,12 +359,15 @@ class ZIMIndexer:
 
         if force_reindex:
             archives_to_index = set(self.archive_names)
-            if self.collection:
+            if self.conn:
                 try:
-                    self.collection.delete(where={})
-                    print("Force reindex: cleared entire collection.")
+                    with self._db_lock:
+                        self.conn.execute("DELETE FROM vec_documents")
+                        self.conn.execute("DELETE FROM documents")
+                        self.conn.commit()
+                    print("Force reindex: cleared entire database.")
                 except Exception as e:
-                    print(f"Failed to clear collection: {e}")
+                    print(f"Failed to clear database: {e}")
         else:
             archives_to_index = new_archives | changed_archives
 
@@ -469,8 +518,10 @@ class ZIMIndexer:
         print(f"  Done: {text_count} text entries, {total_chunks} chunks indexed")
 
     def _add_batch_to_chroma(self, documents: List[str], metadatas: List[dict], ids: List[str]):
-        """Add a batch of documents to ChromaDB with pre-computed embeddings."""
-        import os
+        """Add a batch of documents to SQLite with pre-computed embeddings.
+
+        Note: Method name kept for backward compatibility, but now uses SQLite.
+        """
         debug = os.environ.get('ZIMBOT_DEBUG', '0') == '1'
 
         if debug:
@@ -490,77 +541,113 @@ class ZIMIndexer:
 
         if debug:
             print(f"    [BATCH] model.encode() done, shape={embeddings.shape}", flush=True)
+            print(f"    [BATCH] Inserting into SQLite...", flush=True)
 
-        # Convert embeddings to list
-        embeddings_list = embeddings.tolist()
+        # Insert into SQLite with thread safety - use executemany for performance
+        with self._db_lock:
+            # Prepare batch data for documents table
+            doc_rows = [
+                (
+                    ids[i],
+                    documents[i],
+                    metadatas[i].get('archive', ''),
+                    metadatas[i].get('path', ''),
+                    metadatas[i].get('title', ''),
+                    metadatas[i].get('mimetype', ''),
+                    metadatas[i].get('chunk', 0),
+                    metadatas[i].get('total_chunks', 1)
+                )
+                for i in range(len(ids))
+            ]
+
+            # Prepare batch data for vector table
+            vec_rows = [
+                (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
+                for i in range(len(ids))
+            ]
+
+            # Batch insert documents
+            self.conn.executemany('''
+                INSERT OR REPLACE INTO documents
+                (id, content, archive, path, title, mimetype, chunk, total_chunks)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', doc_rows)
+
+            # Batch insert vectors
+            self.conn.executemany('''
+                INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+                VALUES (?, ?)
+            ''', vec_rows)
+
+            self.conn.commit()
 
         if debug:
-            print(f"    [BATCH] Calling collection.add() one at a time...", flush=True)
-            # Add ONE AT A TIME to find exact crash point
-            for i in range(len(documents)):
-                doc = documents[i]
-                emb = embeddings_list[i]
-                meta = metadatas[i]
-                doc_id = ids[i]
-
-                # Check for suspicious content
-                has_null = '\x00' in doc
-                has_weird = any(ord(c) < 32 and c not in '\n\r\t' for c in doc)
-
-                print(f"    [ADD] {i}/{len(documents)}: id={doc_id[:40]}, len={len(doc)}, null={has_null}, weird={has_weird}, path={meta.get('path','')[:30]}", flush=True)
-
-                try:
-                    self.collection.add(
-                        documents=[doc],
-                        embeddings=[emb],
-                        metadatas=[meta],
-                        ids=[doc_id]
-                    )
-                except Exception as e:
-                    print(f"    [ADD] {i}: EXCEPTION: {e}", flush=True)
-                    raise
-
-            print(f"    [BATCH] All {len(documents)} docs added", flush=True)
-        else:
-            self.collection.add(
-                documents=documents,
-                embeddings=embeddings_list,
-                metadatas=metadatas,
-                ids=ids
-            )
-
-        if debug:
-            print(f"    [BATCH] collection.add() complete", flush=True)
+            print(f"    [BATCH] SQLite insert complete ({len(documents)} docs)", flush=True)
 
     def search(self, query: str, k: int = 5) -> List[Dict]:
-        """Search the indexed content."""
-        if not self.collection:
-            raise RuntimeError("Collection not initialized. Call initialize_chroma() first.")
-        
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=k
-        )
-        
+        """Search the indexed content using vector similarity."""
+        if not self.conn:
+            raise RuntimeError("Database not initialized. Call initialize_chroma() first.")
+
+        # Ensure model is loaded for query embedding
+        if self.model is None:
+            print(f"Loading embedding model for search: {self.config.embedding_model}")
+            self.model = SentenceTransformer(self.config.embedding_model)
+
+        # Generate query embedding
+        query_embedding = self.model.encode(
+            [query],
+            normalize_embeddings=True
+        )[0]
+
+        # Convert to binary format
+        query_bytes = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+
+        # Vector similarity search with sqlite-vec
+        results = self.conn.execute('''
+            SELECT
+                d.id,
+                d.content,
+                d.archive,
+                d.path,
+                d.title,
+                d.mimetype,
+                d.chunk,
+                d.total_chunks,
+                v.distance
+            FROM vec_documents v
+            JOIN documents d ON d.id = v.doc_id
+            WHERE v.embedding MATCH ? AND v.k = ?
+            ORDER BY v.distance
+        ''', (query_bytes, k)).fetchall()
+
         formatted_results = []
-        
-        for i in range(len(results['ids'][0])):
+        for row in results:
             formatted_results.append({
-                'content': results['documents'][0][i],
-                'metadata': results['metadatas'][0][i],
-                'distance': results['distances'][0][i],
-                'id': results['ids'][0][i]
+                'content': row[1],
+                'metadata': {
+                    'archive': row[2],
+                    'path': row[3],
+                    'title': row[4],
+                    'mimetype': row[5],
+                    'chunk': row[6],
+                    'total_chunks': row[7]
+                },
+                'distance': row[8],
+                'id': row[0]
             })
-        
+
         return formatted_results
     
     def get_collection_info(self) -> Dict:
-        """Get information about the current collection."""
-        if not self.collection:
+        """Get information about the current database."""
+        if not self.conn:
             return {"status": "not_initialized"}
 
+        count = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
         return {
-            "count": self.collection.count(),
+            "count": count,
             "archives": self.archive_names,
             "config": {
                 "chunk_size": self.config.chunk_size,
@@ -738,7 +825,7 @@ class ZIMIndexer:
         print(f"  [Worker-{worker_id}] Done: {processed_count} entries, {chunks_count} chunks", flush=True)
 
     def _flush_batch(self, batch: List[ProcessedChunk]):
-        """Embed and store a batch of chunks to ChromaDB."""
+        """Embed and store a batch of chunks to SQLite."""
         if not batch:
             return
 
@@ -747,28 +834,66 @@ class ZIMIndexer:
         ids = [chunk.doc_id for chunk in batch]
 
         # Pre-compute embeddings with sentence-transformers
+        print(f"    [flush] Encoding {len(texts)} texts...", flush=True)
         embeddings = self.model.encode(
             texts,
             batch_size=64,  # Internal batch for model
             show_progress_bar=False,
             normalize_embeddings=True  # For cosine similarity
         )
+        print(f"    [flush] Encoding done, shape={embeddings.shape}", flush=True)
 
-        # Add to ChromaDB with pre-computed embeddings
-        self.collection.add(
-            documents=texts,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-            ids=ids
-        )
+        # Add to SQLite with pre-computed embeddings - use executemany for performance
+        print(f"    [flush] Adding to SQLite...", flush=True)
+
+        with self._db_lock:
+            # Prepare batch data for documents table
+            doc_rows = [
+                (
+                    ids[i],
+                    texts[i],
+                    metadatas[i].get('archive', ''),
+                    metadatas[i].get('path', ''),
+                    metadatas[i].get('title', ''),
+                    metadatas[i].get('mimetype', ''),
+                    metadatas[i].get('chunk', 0),
+                    metadatas[i].get('total_chunks', 1)
+                )
+                for i in range(len(ids))
+            ]
+
+            # Prepare batch data for vector table
+            vec_rows = [
+                (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
+                for i in range(len(ids))
+            ]
+
+            # Batch insert documents
+            self.conn.executemany('''
+                INSERT OR REPLACE INTO documents
+                (id, content, archive, path, title, mimetype, chunk, total_chunks)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', doc_rows)
+
+            # Batch insert vectors
+            self.conn.executemany('''
+                INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+                VALUES (?, ?)
+            ''', vec_rows)
+
+            self.conn.commit()
+
+        print(f"    [flush] SQLite add done", flush=True)
 
         if self.progress:
+            print(f"    [flush] Updating progress...", flush=True)
             with self.progress.lock:
                 self.progress.chunks_embedded += len(batch)
                 self.progress.report()
+            print(f"    [flush] Progress updated, returning to embedder loop", flush=True)
 
     def _embedder_thread(self):
-        """Embedder thread - batch embed and store to ChromaDB."""
+        """Embedder thread - batch embed and store to SQLite."""
         batch: List[ProcessedChunk] = []
         last_flush = time.time()
         last_status = time.time()
@@ -818,6 +943,7 @@ class ZIMIndexer:
                 batches_flushed += 1
                 batch = []
                 last_flush = time.time()
+                print(f"  [Embedder] Batch flushed, continuing loop (queue={self.chunk_queue.qsize()})...", flush=True)
 
         # Final flush
         if batch:
@@ -921,16 +1047,17 @@ class ZIMIndexer:
 
         if force_reindex:
             archives_to_index = set(self.archive_names)
-            if self.collection:
+            if self.conn:
                 try:
-                    # Clear collection for force reindex
-                    count = self.collection.count()
-                    if count > 0:
-                        # Delete all by getting all IDs
-                        self.collection.delete(where={})
-                        print("Force reindex: cleared entire collection.")
+                    with self._db_lock:
+                        count = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+                        if count > 0:
+                            self.conn.execute("DELETE FROM vec_documents")
+                            self.conn.execute("DELETE FROM documents")
+                            self.conn.commit()
+                            print("Force reindex: cleared entire database.")
                 except Exception as e:
-                    print(f"Failed to clear collection: {e}")
+                    print(f"Failed to clear database: {e}")
         else:
             archives_to_index = new_archives | changed_archives
 

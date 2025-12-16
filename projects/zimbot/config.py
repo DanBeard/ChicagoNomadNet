@@ -16,7 +16,7 @@ class ZimBotConfig:
     # Paths
     zim_path: str = os.getenv("ZIM_PATH", "/zim/")
     model_path: str = os.getenv("ZIMBOT_MODEL_PATH", "./models/")
-    chromadb_path: str = os.getenv("ZIMBOT_CHROMADB_PATH", "./chromadb_data")
+    sqlite_db_path: str = os.getenv("ZIMBOT_SQLITE_PATH", "./zimbot.db")
     
     # Performance
     n_threads: int = int(os.getenv("ZIMBOT_N_THREADS", "4"))

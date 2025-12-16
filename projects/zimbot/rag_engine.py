@@ -2,7 +2,7 @@
 RAG Engine
 
 Handles the Retrieval Augmented Generation pipeline:
-- Query retrieval from ChromaDB
+- Query retrieval from SQLite + sqlite-vec
 - Prompt construction with context
 - LLM inference using llama-cpp-python
 - Response generation with source attribution

@@ -5,6 +5,8 @@ models/
 chromadb_data/
 test_zim/
 tmp_zimbot/
+zimbot.db
+zimbot_hashes.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
