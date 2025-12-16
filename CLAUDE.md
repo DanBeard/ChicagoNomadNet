@@ -38,9 +38,19 @@ Dynamic pages written in Python that output Micron markup:
 - `index.mu` - Landing page with system stats and links
 - `zr.mu` - ZIM file browser frontend
 
+## Development Environment
+
+This is a Debian VM - always activate the venv before running Python:
+
+```bash
+source /home/user/Projects/ChicagoNomadNet/venv/bin/activate
+```
+
 ## Running Services
 
 ```bash
+# Always activate venv first, then:
+
 # ZIM host (requires ZIM files)
 ZIM_PATH=/path/to/zim/files/ ZIM_AUTHKEY=secret python zim_host.py
 

@@ -137,7 +137,6 @@ class ZIMIndexer:
         self.reader_done = threading.Event()
         self.workers_done = threading.Event()
         self.progress: Optional[ProgressTracker] = None
-        self._db_lock = threading.Lock()  # For thread-safe DB writes
         
     def initialize_chroma(self):
         """Initialize SQLite database with sqlite-vec extension.
@@ -321,28 +320,27 @@ class ZIMIndexer:
         if not self.conn:
             return
         try:
-            with self._db_lock:
-                # Get doc IDs to delete from vector table
-                cursor = self.conn.execute(
-                    "SELECT id FROM documents WHERE archive = ?",
-                    (archive_name,)
-                )
-                doc_ids = [row[0] for row in cursor.fetchall()]
+            # Get doc IDs to delete from vector table
+            cursor = self.conn.execute(
+                "SELECT id FROM documents WHERE archive = ?",
+                (archive_name,)
+            )
+            doc_ids = [row[0] for row in cursor.fetchall()]
 
-                # Delete from vector table
-                if doc_ids:
-                    placeholders = ','.join('?' * len(doc_ids))
-                    self.conn.execute(
-                        f"DELETE FROM vec_documents WHERE doc_id IN ({placeholders})",
-                        doc_ids
-                    )
-
-                # Delete from documents table
+            # Delete from vector table
+            if doc_ids:
+                placeholders = ','.join('?' * len(doc_ids))
                 self.conn.execute(
-                    "DELETE FROM documents WHERE archive = ?",
-                    (archive_name,)
+                    f"DELETE FROM vec_documents WHERE doc_id IN ({placeholders})",
+                    doc_ids
                 )
-                self.conn.commit()
+
+            # Delete from documents table
+            self.conn.execute(
+                "DELETE FROM documents WHERE archive = ?",
+                (archive_name,)
+            )
+            self.conn.commit()
 
             print(f"  Deleted {len(doc_ids)} documents for archive: {archive_name}")
         except Exception as e:
@@ -361,10 +359,9 @@ class ZIMIndexer:
             archives_to_index = set(self.archive_names)
             if self.conn:
                 try:
-                    with self._db_lock:
-                        self.conn.execute("DELETE FROM vec_documents")
-                        self.conn.execute("DELETE FROM documents")
-                        self.conn.commit()
+                    self.conn.execute("DELETE FROM vec_documents")
+                    self.conn.execute("DELETE FROM documents")
+                    self.conn.commit()
                     print("Force reindex: cleared entire database.")
                 except Exception as e:
                     print(f"Failed to clear database: {e}")
@@ -543,43 +540,42 @@ class ZIMIndexer:
             print(f"    [BATCH] model.encode() done, shape={embeddings.shape}", flush=True)
             print(f"    [BATCH] Inserting into SQLite...", flush=True)
 
-        # Insert into SQLite with thread safety - use executemany for performance
-        with self._db_lock:
-            # Prepare batch data for documents table
-            doc_rows = [
-                (
-                    ids[i],
-                    documents[i],
-                    metadatas[i].get('archive', ''),
-                    metadatas[i].get('path', ''),
-                    metadatas[i].get('title', ''),
-                    metadatas[i].get('mimetype', ''),
-                    metadatas[i].get('chunk', 0),
-                    metadatas[i].get('total_chunks', 1)
-                )
-                for i in range(len(ids))
-            ]
+        # Insert into SQLite - use executemany for performance
+        # Prepare batch data for documents table
+        doc_rows = [
+            (
+                ids[i],
+                documents[i],
+                metadatas[i].get('archive', ''),
+                metadatas[i].get('path', ''),
+                metadatas[i].get('title', ''),
+                metadatas[i].get('mimetype', ''),
+                metadatas[i].get('chunk', 0),
+                metadatas[i].get('total_chunks', 1)
+            )
+            for i in range(len(ids))
+        ]
 
-            # Prepare batch data for vector table
-            vec_rows = [
-                (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
-                for i in range(len(ids))
-            ]
+        # Prepare batch data for vector table
+        vec_rows = [
+            (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
+            for i in range(len(ids))
+        ]
 
-            # Batch insert documents
-            self.conn.executemany('''
-                INSERT OR REPLACE INTO documents
-                (id, content, archive, path, title, mimetype, chunk, total_chunks)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', doc_rows)
+        # Batch insert documents
+        self.conn.executemany('''
+            INSERT OR REPLACE INTO documents
+            (id, content, archive, path, title, mimetype, chunk, total_chunks)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', doc_rows)
 
-            # Batch insert vectors
-            self.conn.executemany('''
-                INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
-                VALUES (?, ?)
-            ''', vec_rows)
+        # Batch insert vectors
+        self.conn.executemany('''
+            INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+            VALUES (?, ?)
+        ''', vec_rows)
 
-            self.conn.commit()
+        self.conn.commit()
 
         if debug:
             print(f"    [BATCH] SQLite insert complete ({len(documents)} docs)", flush=True)
@@ -846,51 +842,49 @@ class ZIMIndexer:
         # Add to SQLite with pre-computed embeddings - use executemany for performance
         print(f"    [flush] Adding to SQLite...", flush=True)
 
-        with self._db_lock:
-            # Prepare batch data for documents table
-            doc_rows = [
-                (
-                    ids[i],
-                    texts[i],
-                    metadatas[i].get('archive', ''),
-                    metadatas[i].get('path', ''),
-                    metadatas[i].get('title', ''),
-                    metadatas[i].get('mimetype', ''),
-                    metadatas[i].get('chunk', 0),
-                    metadatas[i].get('total_chunks', 1)
-                )
-                for i in range(len(ids))
-            ]
+        # Prepare batch data for documents table
+        doc_rows = [
+            (
+                ids[i],
+                texts[i],
+                metadatas[i].get('archive', ''),
+                metadatas[i].get('path', ''),
+                metadatas[i].get('title', ''),
+                metadatas[i].get('mimetype', ''),
+                metadatas[i].get('chunk', 0),
+                metadatas[i].get('total_chunks', 1)
+            )
+            for i in range(len(ids))
+        ]
 
-            # Prepare batch data for vector table
-            vec_rows = [
-                (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
-                for i in range(len(ids))
-            ]
+        # Prepare batch data for vector table
+        vec_rows = [
+            (ids[i], struct.pack(f'{len(embeddings[i])}f', *embeddings[i]))
+            for i in range(len(ids))
+        ]
 
-            # Batch insert documents
-            self.conn.executemany('''
-                INSERT OR REPLACE INTO documents
-                (id, content, archive, path, title, mimetype, chunk, total_chunks)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', doc_rows)
+        # Batch insert documents
+        self.conn.executemany('''
+            INSERT OR REPLACE INTO documents
+            (id, content, archive, path, title, mimetype, chunk, total_chunks)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', doc_rows)
 
-            # Batch insert vectors
-            self.conn.executemany('''
-                INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
-                VALUES (?, ?)
-            ''', vec_rows)
+        # Batch insert vectors
+        self.conn.executemany('''
+            INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+            VALUES (?, ?)
+        ''', vec_rows)
 
-            self.conn.commit()
+        self.conn.commit()
 
         print(f"    [flush] SQLite add done", flush=True)
 
         if self.progress:
-            print(f"    [flush] Updating progress...", flush=True)
             with self.progress.lock:
                 self.progress.chunks_embedded += len(batch)
-                self.progress.report()
-            print(f"    [flush] Progress updated, returning to embedder loop", flush=True)
+            # report() acquires its own lock, so call it outside the with block
+            self.progress.report()
 
     def _embedder_thread(self):
         """Embedder thread - batch embed and store to SQLite."""
@@ -943,7 +937,6 @@ class ZIMIndexer:
                 batches_flushed += 1
                 batch = []
                 last_flush = time.time()
-                print(f"  [Embedder] Batch flushed, continuing loop (queue={self.chunk_queue.qsize()})...", flush=True)
 
         # Final flush
         if batch:
@@ -1049,13 +1042,12 @@ class ZIMIndexer:
             archives_to_index = set(self.archive_names)
             if self.conn:
                 try:
-                    with self._db_lock:
-                        count = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-                        if count > 0:
-                            self.conn.execute("DELETE FROM vec_documents")
-                            self.conn.execute("DELETE FROM documents")
-                            self.conn.commit()
-                            print("Force reindex: cleared entire database.")
+                    count = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+                    if count > 0:
+                        self.conn.execute("DELETE FROM vec_documents")
+                        self.conn.execute("DELETE FROM documents")
+                        self.conn.commit()
+                        print("Force reindex: cleared entire database.")
                 except Exception as e:
                     print(f"Failed to clear database: {e}")
         else:
