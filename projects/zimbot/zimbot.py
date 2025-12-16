@@ -102,8 +102,8 @@ Note: Responses may take a few seconds as I search through offline archives."""
             print("Checking if indexing is needed...")
 
             try:
-                # Simple single-threaded indexer using zimfast
-                indexing_result = self.indexer.index_archives_simple()
+                # Use threaded indexer for speed (set ZIMBOT_INDEXER_WORKERS env var, default 4)
+                indexing_result = self.indexer.index_archives_threaded()
                 if indexing_result:
                     print("Indexing completed successfully.")
                 else:

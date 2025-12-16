@@ -582,12 +582,15 @@ class ZIMIndexer:
                                  start_idx: int, end_idx: int, reader_id: int):
         """Reader thread using zimfast - reads a range of entries by cluster index."""
         text_entries = 0
+        skipped_non_text = 0
+        skipped_redirect = 0
         last_status = time.time()
         current_idx = start_idx
 
         try:
+            print(f"  [Reader-{reader_id}] Opening ZIM file...", flush=True)
             reader = ZimFastReader(filepath)
-            print(f"  [Reader-{reader_id}] Started: indices {start_idx}-{end_idx}")
+            print(f"  [Reader-{reader_id}] Started: indices {start_idx}-{end_idx} ({end_idx-start_idx} entries)", flush=True)
 
             for idx in range(start_idx, end_idx):
                 if self.shutdown_event.is_set():
@@ -597,12 +600,14 @@ class ZIMIndexer:
                 result = reader.get_entry(idx)
 
                 if result is None:  # Redirect or error
+                    skipped_redirect += 1
                     continue
 
                 path, title, content, mime_type = result
 
                 # Skip non-text content
                 if mime_type and not mime_type.startswith('text/'):
+                    skipped_non_text += 1
                     continue
 
                 # Detect mime type if not set
@@ -629,26 +634,31 @@ class ZIMIndexer:
                     with self.progress.lock:
                         self.progress.entries_read += 1
 
-                # Status every 10 seconds
+                # Status every 5 seconds
                 now = time.time()
-                if now - last_status >= 10:
+                if now - last_status >= 5:
                     progress_pct = (idx - start_idx) / (end_idx - start_idx) * 100
-                    print(f"  [Reader-{reader_id}] {progress_pct:.1f}% ({idx}/{end_idx}), "
-                          f"{text_entries} text queued")
+                    qsize = self.raw_queue.qsize() if self.raw_queue else 0
+                    print(f"  [Reader-{reader_id}] {progress_pct:.1f}% idx={idx}, "
+                          f"text={text_entries}, skip={skipped_redirect+skipped_non_text}, "
+                          f"queue={qsize}", flush=True)
                     last_status = now
 
         except Exception as e:
-            print(f"  [Reader-{reader_id}] Error at idx {current_idx}: {e}")
+            print(f"  [Reader-{reader_id}] Error at idx {current_idx}: {e}", flush=True)
             import traceback
             traceback.print_exc()
         finally:
-            print(f"  [Reader-{reader_id}] Done: {text_entries} text entries queued")
+            print(f"  [Reader-{reader_id}] Done: {text_entries} text, "
+                  f"{skipped_redirect} redirects, {skipped_non_text} non-text skipped", flush=True)
 
     def _worker_thread(self, worker_id: int):
         """Worker thread - text extraction and chunking."""
         processed_count = 0
         chunks_count = 0
         last_status = time.time()
+
+        print(f"  [Worker-{worker_id}] Started", flush=True)
 
         while not self.shutdown_event.is_set():
             try:
@@ -660,6 +670,13 @@ class ZIMIndexer:
 
             if entry is None:  # Sentinel
                 break
+
+            # Status every 5 seconds
+            now = time.time()
+            if now - last_status >= 5:
+                cqsize = self.chunk_queue.qsize() if self.chunk_queue else 0
+                print(f"  [Worker-{worker_id}] processed={processed_count}, chunks={chunks_count}, chunk_queue={cqsize}", flush=True)
+                last_status = now
 
             try:
                 # Extract text
@@ -718,8 +735,7 @@ class ZIMIndexer:
                 # Skip bad entries silently
                 pass
 
-        if worker_id == 0:
-            print(f"  [Worker-0] Done: {processed_count} entries, {chunks_count} chunks")
+        print(f"  [Worker-{worker_id}] Done: {processed_count} entries, {chunks_count} chunks", flush=True)
 
     def _flush_batch(self, batch: List[ProcessedChunk]):
         """Embed and store a batch of chunks to ChromaDB."""
@@ -757,8 +773,9 @@ class ZIMIndexer:
         last_flush = time.time()
         last_status = time.time()
         batches_flushed = 0
+        first_chunk_received = False
 
-        print("  [Embedder] Started, waiting for chunks...")
+        print("  [Embedder] Started, waiting for chunks...", flush=True)
 
         while not self.shutdown_event.is_set():
             try:
@@ -766,17 +783,18 @@ class ZIMIndexer:
             except queue.Empty:
                 # Flush on timeout if we have pending chunks
                 if batch and (time.time() - last_flush) >= self.config.embed_timeout:
-                    print(f"  [Embedder] Timeout flush: {len(batch)} chunks")
+                    print(f"  [Embedder] Timeout flush: {len(batch)} chunks", flush=True)
                     self._flush_batch(batch)
                     batches_flushed += 1
                     batch = []
                     last_flush = time.time()
 
-                # Status update every 30 seconds
+                # Status update every 5 seconds
                 now = time.time()
-                if now - last_status >= 30:
-                    print(f"  [Embedder] batches: {batches_flushed}, "
-                          f"pending: {len(batch)}, embedded: {self.progress.chunks_embedded if self.progress else 0}")
+                if now - last_status >= 5:
+                    embedded = self.progress.chunks_embedded if self.progress else 0
+                    print(f"  [Embedder] batches={batches_flushed}, pending={len(batch)}, "
+                          f"embedded={embedded}, queue={self.chunk_queue.qsize()}", flush=True)
                     last_status = now
 
                 # Check if all workers are done
@@ -787,10 +805,15 @@ class ZIMIndexer:
             if chunk is None:  # Sentinel
                 break
 
+            if not first_chunk_received:
+                print(f"  [Embedder] First chunk received!", flush=True)
+                first_chunk_received = True
+
             batch.append(chunk)
 
             # Flush when batch is full
             if len(batch) >= self.config.embed_batch_size:
+                print(f"  [Embedder] Flushing batch of {len(batch)} chunks...", flush=True)
                 self._flush_batch(batch)
                 batches_flushed += 1
                 batch = []
