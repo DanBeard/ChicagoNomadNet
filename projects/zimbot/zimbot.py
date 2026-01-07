@@ -9,6 +9,9 @@ import os
 import asyncio
 import time
 import traceback
+import threading
+import sqlite3
+import json
 from typing import List, Dict, Optional, Tuple
 
 import RNS
@@ -17,6 +20,84 @@ from LXMF import LXMessage, LXMRouter
 from .config import ZimBotConfig, get_config
 from .zim_indexer import ZIMIndexer
 from .rag_engine import RAGEngine, RAGResponse
+from .lazy_worker import EmbeddingWorkerManager
+from .lazy_keywords import KeywordExtractor
+from .user_state import UserStateManager, UserState, Mode
+from .mode_handlers import (
+    HelpModeHandler, ChatModeHandler,
+    SearchModeHandler, OptionsModeHandler
+)
+
+
+class ConversationManager:
+    """Manages per-user conversation history with SQLite storage."""
+
+    def __init__(self, db_path: str, max_messages: int = 6, max_history_chars: int = 1500):
+        self.db_path = db_path
+        self.max_messages = max_messages
+        self.max_history_chars = max_history_chars
+        self._init_db()
+
+    def _init_db(self):
+        """Initialize the conversations table."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                user_hash TEXT PRIMARY KEY,
+                history TEXT NOT NULL DEFAULT '[]',
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def get_history(self, user_hash: str) -> List[Dict]:
+        """Fetch conversation history for a user."""
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT history FROM conversations WHERE user_hash = ?",
+            (user_hash,)
+        ).fetchone()
+        conn.close()
+        return json.loads(row[0]) if row else []
+
+    def add_exchange(self, user_hash: str, question: str, answer: str):
+        """Add a question/answer exchange to history."""
+        history = self.get_history(user_hash)
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer[:500]})  # Truncate long answers
+
+        # Compact if too many messages
+        if len(history) > self.max_messages:
+            history = self._compact(history)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute('''
+            INSERT OR REPLACE INTO conversations (user_hash, history, last_updated)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        ''', (user_hash, json.dumps(history)))
+        conn.commit()
+        conn.close()
+
+    def _compact(self, history: List[Dict]) -> List[Dict]:
+        """Keep only the last N messages."""
+        if len(history) <= self.max_messages:
+            return history
+        return history[-self.max_messages:]
+
+    def format_for_prompt(self, user_hash: str) -> str:
+        """Format conversation history for inclusion in LLM prompt."""
+        history = self.get_history(user_hash)
+        if not history:
+            return ""
+
+        lines = ["Previous conversation:"]
+        for msg in history[-4:]:  # Last 4 messages only for prompt
+            role = "User" if msg["role"] == "user" else "Bot"
+            content = msg["content"][:200]  # Truncate for prompt
+            lines.append(f"{role}: {content}")
+
+        return "\n".join(lines) + "\n"
 
 
 class ZimBot:
@@ -34,29 +115,46 @@ class ZimBot:
         # Initialize components
         self.indexer = ZIMIndexer(self.config)
         self.rag_engine = RAGEngine(self.config, self.indexer)
+        self.conversation_manager = ConversationManager(
+            db_path=self.config.sqlite_db_path,
+            max_messages=self.config.max_conversation_messages
+        )
 
         # State management
         self.is_ready = False
         self.is_indexing = False
         self.last_announce = 0
+        self.last_worker_check = 0
 
         # Message queues
         self._msg_queue = []
         self._response_queue = []
-        
+
+        # Lazy embedding components
+        self.embedding_worker: Optional[EmbeddingWorkerManager] = None
+        self.keyword_extractor: Optional[KeywordExtractor] = None
+
+        # User state and mode handlers
+        self.state_manager = UserStateManager(db_path=self.config.sqlite_db_path)
+        self.mode_handlers = {}  # Initialized after components ready
+
         # Help text
-        self.help_text = f"""ZimBot - Offline AI Assistant
+        self.help_text = """Welcome to ZimBot!
 
-Ask me questions about topics in the available ZIM archives. I use local AI models to provide answers.
+I'm an offline AI assistant powered by ZIM archives (Wikipedia, StackOverflow, etc.).
 
-Commands:
-/help - Show this help message
-/sources - Show information about available knowledge sources
-/status - Show bot status and statistics
+MODES:
+/chat - Ask questions, get AI-powered answers
+/search - Quick search, returns titles + snippets
+/options - Configure bot settings
 
-Example: "What is quantum computing?"
+COMMANDS:
+/help - Show this message
+/sources - List available archives
+/status - Show bot status
+/mode - Show current mode
 
-Note: Responses may take a few seconds as I search through offline archives."""
+Type /chat to start asking questions!"""
     
     def _setup_identity(self) -> RNS.Identity:
         """Set up or load the bot's identity."""
@@ -97,7 +195,7 @@ Note: Responses may take a few seconds as I search through offline archives."""
             archive_names = []
 
         # Index archives if needed (do this BEFORE starting network)
-        if archive_names:
+        if archive_names and not self.config.skip_startup_indexing:
             self.is_indexing = True
             print("Checking if indexing is needed...")
 
@@ -113,14 +211,53 @@ Note: Responses may take a few seconds as I search through offline archives."""
                 traceback.print_exc()
             finally:
                 self.is_indexing = False
+        elif self.config.skip_startup_indexing:
+            print("Skipping startup indexing (ZIMBOT_SKIP_INDEXING=1)")
 
-        # Load LLM model
+        # Load LLM model (fatal if fails)
         try:
             self.rag_engine.load_model()
             print("LLM model loaded successfully.")
         except Exception as e:
-            print(f"Failed to load LLM model: {e}")
-            # Continue without model - bot can still provide basic functionality
+            print(f"\n{'='*60}")
+            print(f"FATAL: Failed to load LLM model!")
+            print(f"{'='*60}")
+            print(f"Model path: {self.config.model_path}")
+            print(f"Error: {e}")
+            print(f"\nMake sure:")
+            print(f"  1. ZIMBOT_MODEL_PATH points to a directory with .gguf files")
+            print(f"  2. The .gguf file is a valid llama.cpp model")
+            print(f"  3. You have enough RAM to load the model")
+            print(f"{'='*60}\n")
+            raise SystemExit(1)
+
+        # Initialize lazy embedding components
+        if self.config.lazy_embedding_enabled:
+            print("Initializing lazy embedding system...")
+            self.keyword_extractor = KeywordExtractor(
+                max_keywords=self.config.lazy_keywords_count
+            )
+            self.embedding_worker = EmbeddingWorkerManager(self.config)
+            self.embedding_worker.start()
+            print("Lazy embedding worker started.")
+
+        # Preload embedding model for fast first search
+        print("Preloading embedding model for vector search...")
+        try:
+            self.indexer._init_model()
+            print("Embedding model preloaded.")
+        except Exception as e:
+            print(f"Warning: Failed to preload embedding model: {e}")
+
+        # Initialize mode handlers (after LLM is loaded)
+        print("Initializing mode handlers...")
+        self.mode_handlers = {
+            Mode.HELP: HelpModeHandler(),
+            Mode.CHAT: ChatModeHandler(self.rag_engine, self.conversation_manager),
+            Mode.SEARCH: SearchModeHandler(self.indexer),
+            Mode.OPTIONS: OptionsModeHandler(self.state_manager, self.rag_engine.llm),
+        }
+        print("Mode handlers initialized.")
 
         # Now initialize Reticulum and LXMF (after indexing is complete)
         print("Initializing Reticulum network stack...")
@@ -148,30 +285,101 @@ Note: Responses may take a few seconds as I search through offline archives."""
         """Callback for when a message is received."""
         reply_hash = message.source_hash
         content = message.content.decode().strip()
-        
-        print(f"Received message from {reply_hash.hex()}: {content}")
-        
-        # Handle commands
+        user_hash = reply_hash.hex()
+
+        print(f"Received message from {user_hash}: {content}")
+
+        # Get user state
+        user_state = self.state_manager.get_state(user_hash)
+
+        # Handle commands (work in any mode)
         if content.startswith("/"):
-            self._handle_command(content, reply_hash)
+            response, new_mode = self._handle_command(content, user_state)
+            if new_mode:
+                self.state_manager.set_mode(user_hash, new_mode)
+            self._response_queue.append((reply_hash, response))
+            return
+
+        # Route to mode handler
+        handler = self.mode_handlers.get(user_state.mode)
+        if handler:
+            # CHAT mode needs async processing (uses LLM for RAG)
+            if user_state.mode == Mode.CHAT:
+                self._msg_queue.append((reply_hash, content, user_state))
+            else:
+                # Other modes can be processed synchronously
+                # (SEARCH uses embeddings only, OPTIONS uses grammar-constrained LLM which is fast)
+                result = handler.handle_message(content, user_state)
+                self._response_queue.append((reply_hash, result.text))
+
+                # Mark as onboarded after first non-help interaction
+                if user_state.is_new_user and user_state.mode != Mode.HELP:
+                    self.state_manager.mark_not_new(user_hash)
         else:
-            # Regular question - queue for processing
-            self._msg_queue.append((reply_hash, content))
+            # Fallback (shouldn't happen)
+            self._response_queue.append((reply_hash, "Error: Unknown mode. Type /help for help."))
     
-    def _handle_command(self, command: str, reply_hash: bytes):
-        """Handle bot commands."""
-        cmd = command.split()[0].lower() if command else ""
-        
-        if cmd == "/help":
-            response = self.help_text
+    def _handle_command(self, command: str, user_state: UserState) -> Tuple[str, Optional[Mode]]:
+        """Handle bot commands. Returns (response_text, new_mode_or_None)."""
+        parts = command.split()
+        cmd = parts[0].lower() if parts else ""
+        new_mode = None
+
+        # Mode switching commands
+        if cmd in ("/chat", "/c"):
+            new_mode = Mode.CHAT
+            response = "Switched to CHAT mode. Ask me anything!"
+
+        elif cmd in ("/search", "/s"):
+            new_mode = Mode.SEARCH
+            response = "Switched to SEARCH mode. Enter search terms."
+
+        elif cmd in ("/help", "/h", "/about"):
+            new_mode = Mode.HELP
+            handler = self.mode_handlers.get(Mode.HELP)
+            if handler:
+                response = handler.handle_message("", user_state).text
+            else:
+                response = self.help_text
+
+        elif cmd in ("/options", "/settings", "/o"):
+            new_mode = Mode.OPTIONS
+            handler = self.mode_handlers.get(Mode.OPTIONS)
+            if handler:
+                response = handler.handle_message("", user_state).text
+            else:
+                response = "Options mode not available."
+
+        elif cmd == "/back":
+            # Return to chat from options
+            if user_state.mode == Mode.OPTIONS:
+                new_mode = Mode.CHAT
+                response = "Back to CHAT mode."
+            else:
+                response = "Use /chat, /search, or /options to switch modes."
+
+        # Options commands that work from OPTIONS mode
+        elif cmd in ("/toggle", "/set", "/show") and user_state.mode == Mode.OPTIONS:
+            handler = self.mode_handlers.get(Mode.OPTIONS)
+            if handler:
+                response = handler.handle_message(command, user_state).text
+            else:
+                response = "Options mode not available."
+
+        # Info commands (don't change mode)
         elif cmd == "/sources":
             response = self._get_sources_info()
+
         elif cmd == "/status":
             response = self._get_status_info()
+
+        elif cmd == "/mode":
+            response = f"Current mode: {user_state.mode.value.upper()}"
+
         else:
             response = f"Unknown command: {cmd}. Type /help for available commands."
-        
-        self._response_queue.append((reply_hash, response))
+
+        return response, new_mode
     
     def _get_sources_info(self) -> str:
         """Get information about available knowledge sources."""
@@ -219,56 +427,88 @@ Note: Responses may take a few seconds as I search through offline archives."""
         return "\n".join(status_lines)
     
     async def _process_questions(self):
-        """Process queued questions using the RAG engine."""
+        """Process queued CHAT mode questions using the RAG engine."""
         if not self.is_ready or self.is_indexing:
             return
-        
+
         if not self.rag_engine.model_loaded:
             # Model not loaded - provide basic response
-            for reply_hash, question in self._msg_queue:
+            for item in self._msg_queue:
+                reply_hash = item[0]
                 response = "Sorry, my AI model is not currently available. Please try again later."
                 self._response_queue.append((reply_hash, response))
             self._msg_queue = []
             return
-        
+
         # Process each question
         processed_questions = []
-        
-        for reply_hash, question in self._msg_queue:
+        chat_handler = self.mode_handlers.get(Mode.CHAT)
+
+        for item in self._msg_queue:
+            # Unpack: now includes user_state
+            reply_hash, question, user_state = item
+            user_hash = user_state.user_hash
+
             try:
                 print(f"Processing question: {question}")
-                
-                # Generate response using RAG
-                rag_response = self.rag_engine.generate_response(question)
-                
-                # Format the response
-                response = f"{rag_response.answer}"
-                
-                # Add processing info
-                response += f"\n\n({rag_response.processing_time:.1f}s, {rag_response.tokens_used} tkns)"
-                
+
+                # Get conversation history for this user
+                conversation_history = self.conversation_manager.format_for_prompt(user_hash)
+                if conversation_history:
+                    print(f"[Conv History] {len(conversation_history)} chars for user {user_hash[:8]}...")
+
+                # Generate response using RAG (with conversation context and verbosity preference)
+                verbosity = user_state.preferences.verbosity
+                rag_response = self.rag_engine.generate_response(question, conversation_history, verbosity)
+
+                # Format the response based on user preferences
+                if chat_handler:
+                    response = chat_handler.format_rag_response(rag_response, user_state.preferences)
+                else:
+                    response = rag_response.answer
+
+                # Check if coverage was insufficient and trigger lazy embedding
+                if not rag_response.coverage_sufficient and self.embedding_worker:
+                    # Add acknowledgment to response
+                    coverage_msg = ("\n\n[Note: I don't have much indexed on this topic yet. "
+                                    "My knowledge will improve for future questions.]")
+                    response += coverage_msg
+
+                    # Extract keywords and queue for embedding (async - don't block response)
+                    if self.keyword_extractor:
+                        self._async_queue_keywords(question)
+
+                # Save this exchange to conversation history
+                self.conversation_manager.add_exchange(user_hash, question, rag_response.answer)
+
+                # Mark as onboarded after first chat
+                if user_state.is_new_user:
+                    self.state_manager.mark_not_new(user_hash)
+
                 self._response_queue.append((reply_hash, response))
-                processed_questions.append((reply_hash, question))
-                
+                processed_questions.append(item)
+
             except Exception as e:
                 error_msg = f"Sorry, I encountered an error processing your question: {str(e)}"
                 self._response_queue.append((reply_hash, error_msg))
                 print(f"Error processing question: {e}")
                 traceback.print_exc()
-        
+
         # Remove processed questions from queue
-        for reply_hash, question in processed_questions:
-            if (reply_hash, question) in self._msg_queue:
-                self._msg_queue.remove((reply_hash, question))
+        for item in processed_questions:
+            if item in self._msg_queue:
+                self._msg_queue.remove(item)
     
     async def _send_responses(self):
         """Send queued responses."""
         sent_responses = []
-        
+
         for reply_hash, text in self._response_queue:
             try:
                 dest_id = RNS.Identity.recall(reply_hash)
-                if dest_id is not None and RNS.Transport.has_path(reply_hash):
+                has_path = RNS.Transport.has_path(reply_hash)
+
+                if dest_id is not None and has_path:
                     destination = RNS.Destination(dest_id, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
                     
                     lxm = LXMessage(
@@ -294,6 +534,20 @@ Note: Responses may take a few seconds as I search through offline archives."""
             if (reply_hash, text) in self._response_queue:
                 self._response_queue.remove((reply_hash, text))
     
+    def _async_queue_keywords(self, question: str):
+        """Queue keywords for embedding in background thread (non-blocking)."""
+        def _do_queue():
+            try:
+                keywords = self.keyword_extractor.extract_all(question)
+                if keywords:
+                    print(f"[Async] Queueing keywords: {keywords}")
+                    self.embedding_worker.queue_keywords(keywords, priority=10)
+            except Exception as e:
+                print(f"[Async] Keyword extraction failed: {e}")
+
+        thread = threading.Thread(target=_do_queue, daemon=True)
+        thread.start()
+
     async def _periodic_announce(self):
         """Periodically announce the bot's presence."""
         now = time.time()
@@ -302,35 +556,66 @@ Note: Responses may take a few seconds as I search through offline archives."""
             self.router.announce(self.source.hash)
             self.last_announce = now
     
+    async def _check_worker_health(self):
+        """Periodically check and restart embedding worker if needed."""
+        now = time.time()
+        if now - self.last_worker_check < 60:  # Check every 60 seconds
+            return
+
+        self.last_worker_check = now
+
+        if self.embedding_worker:
+            self.embedding_worker.restart_if_dead()
+
+            # Get and log status
+            status = self.embedding_worker.get_status()
+            if status:
+                print(f"[Worker Status] embedded={status.get('articles_embedded', 0)}, "
+                      f"queue={status.get('queue_depth', 0)}, "
+                      f"cpu={status.get('cpu_avg', 0):.1f}%")
+
+    def _shutdown_worker(self):
+        """Gracefully shutdown the embedding worker."""
+        if self.embedding_worker:
+            print("Stopping embedding worker...")
+            self.embedding_worker.stop()
+
     async def run(self):
         """Main run loop for the bot."""
         print("Starting ZimBot...")
-        
+
         # Initialize components
         await self._initialize_components()
-        
+
         # Main loop
-        while True:
-            try:
-                # Process questions
-                await self._process_questions()
-                
-                # Send responses
-                await self._send_responses()
-                
-                # Periodic announcement
-                await self._periodic_announce()
-                
-                # Small sleep to prevent CPU overload
-                await asyncio.sleep(1.0)
-                
-            except KeyboardInterrupt:
-                print("Shutting down ZimBot...")
-                break
-            except Exception as e:
-                print(f"Error in main loop: {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5.0)  # Wait before retrying
+        try:
+            while True:
+                try:
+                    # Process questions
+                    await self._process_questions()
+
+                    # Send responses
+                    await self._send_responses()
+
+                    # Periodic announcement
+                    await self._periodic_announce()
+
+                    # Check embedding worker health
+                    await self._check_worker_health()
+
+                    # Small sleep to prevent CPU overload
+                    await asyncio.sleep(1.0)
+
+                except KeyboardInterrupt:
+                    print("Shutting down ZimBot...")
+                    break
+                except Exception as e:
+                    print(f"Error in main loop: {e}")
+                    traceback.print_exc()
+                    await asyncio.sleep(5.0)  # Wait before retrying
+        finally:
+            # Cleanup
+            self._shutdown_worker()
 
 
 def main():
