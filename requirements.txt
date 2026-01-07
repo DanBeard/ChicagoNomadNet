@@ -17,3 +17,7 @@ zimscan>=0.1.0
 # Utility dependencies
 numpy>=1.21.0
 requests>=2.25.0
+
+# Security Now! Dependencies
+feedparser>=6.0.0
+beautifulsoup4>=4.12.0

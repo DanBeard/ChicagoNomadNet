@@ -21,10 +21,11 @@ page=f"""
                ╷ ╷
                │ │                   Chicago Nomad
                ║ ║                                     
-               ║ ║                   Apps (Work in progress) :                           
-              ▐███▌                    `F66d`[Offline zim of Wikipedia, Stackoverflow, & manuals`:/page/zr.mu]`f 
-              ▐███▌      │   │         QR code router at lxmf@109bcc2a640466a04b533134ba0d071d
-              ▐███▌      ╽   ╽              Send it an image LXMF QR code & it will send the message
+               ║ ║                   Apps (Work in progress) :
+              ▐███▌                    `F66d`[Offline zim of Wikipedia, Stackoverflow, & manuals`:/page/zr.mu]`f
+              ▐███▌      │   │         `F0af`[Security Now! Daily Digest`:/page/sn.mu]`f - AI-generated news
+              ▐███▌      ╽   ╽         QR code router at lxmf@109bcc2a640466a04b533134ba0d071d
+             ▐█████▌     ┃   ┃              Send it an image LXMF QR code & it will send the message
              ▐█████▌     ┃   ┃
              ▐█████▌     █████         LoRa locations: 
        ▄██▄  ▐█████▌     █████           Grant Park 

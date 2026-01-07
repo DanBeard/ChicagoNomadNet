@@ -1,0 +1,45 @@
+# llama.cpp Server for Security Now! Model
+#
+# Prerequisites:
+#   - Build llama.cpp: git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp && make -j
+#   - Copy the fine-tuned model to /home/v/models/
+#
+# Install:
+#   sudo cp llama-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable llama-server
+#   sudo systemctl start llama-server
+#
+# Check status:
+#   sudo systemctl status llama-server
+#   journalctl -u llama-server -f
+
+[Unit]
+Description=llama.cpp Server for Security Now!
+After=network.target
+
+[Service]
+Type=simple
+User=v
+
+# Adjust paths as needed
+ExecStart=/home/v/llama.cpp/llama-server \
+    -m /home/v/models/security_now_mistral7b.gguf \
+    --host 127.0.0.1 \
+    --port 8080 \
+    -c 4096 \
+    -t 8 \
+    --log-disable
+
+Restart=always
+RestartSec=10
+
+# Give it time to load the model
+TimeoutStartSec=300
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

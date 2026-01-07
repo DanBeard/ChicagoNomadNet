@@ -1,0 +1,40 @@
+# Security Now! NomadNet Backend Service
+#
+# Install:
+#   sudo cp security-host.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable security-host
+#   sudo systemctl start security-host
+#
+# Check status:
+#   sudo systemctl status security-host
+#   journalctl -u security-host -f
+
+[Unit]
+Description=Security Now! NomadNet Backend
+After=network.target
+
+[Service]
+Type=simple
+User=v
+WorkingDirectory=/home/v/ChicagoNomadNet
+
+# Set your auth key here (or use EnvironmentFile)
+Environment="SN_AUTHKEY=changeme"
+Environment="SN_DB_PATH=/home/v/ChicagoNomadNet/projects/security_now/security_now.db"
+Environment="SN_HOST_PORT=6001"
+Environment="SN_LLAMA_URL=http://127.0.0.1:8080"
+
+# Activate venv and run
+ExecStart=/home/v/ChicagoNomadNet/venv/bin/python \
+    /home/v/ChicagoNomadNet/projects/security_now/security_host.py
+
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+# MLX-LM LoRA Training Configuration for Security Now! Model
+#
+# Base model: Mistral 7B Instruct v0.3
+# Target: Capture Steve Gibson's explanatory style
+#
+# Run on Mac M1 Max (64GB RAM):
+#   mlx_lm.lora --config config.yaml
+
+# Model
+model: "mistralai/Mistral-7B-Instruct-v0.3"
+
+# LoRA configuration
+lora_layers: 16          # Number of layers to apply LoRA (more = better but slower)
+lora_rank: 16            # Rank of LoRA matrices (higher = more capacity)
+lora_alpha: 32           # LoRA scaling factor
+lora_dropout: 0.05       # Dropout for regularization
+
+# Training hyperparameters
+batch_size: 4            # Batch size (M1 Max 64GB can handle this)
+learning_rate: 1.0e-5    # Conservative LR for fine-tuning
+iters: 2000              # Training iterations
+warmup_steps: 100        # LR warmup
+weight_decay: 0.01       # L2 regularization
+grad_checkpoint: true    # Gradient checkpointing to save memory
+
+# Data
+data: "./training_data"  # Directory with train.jsonl and valid.jsonl
+max_seq_length: 2048     # Max sequence length
+
+# Output
+adapter_path: "./adapters/security_now_v1"
+save_every: 500          # Save checkpoint every N iterations
+val_every: 100           # Validate every N iterations
+
+# Logging
+report_to: "none"        # No external logging

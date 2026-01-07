@@ -1,0 +1,24 @@
+# Security Now! Cron Jobs
+#
+# Install:
+#   sudo cp security-now.cron /etc/cron.d/security-now
+#   sudo chmod 644 /etc/cron.d/security-now
+#
+# Or add to user crontab:
+#   crontab -e
+#   # Then paste the lines below (without the user field)
+
+# Environment
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+VENV=/home/v/ChicagoNomadNet/venv/bin/python
+PROJECT=/home/v/ChicagoNomadNet/projects/security_now
+
+# Fetch news every hour
+0 * * * * v cd /home/v/ChicagoNomadNet && $VENV -m projects.security_now.news.news_fetcher >> /var/log/security_now_fetch.log 2>&1
+
+# Generate digest daily at 6 AM UTC
+0 6 * * * v cd /home/v/ChicagoNomadNet && $VENV -m projects.security_now.generator.digest_generator >> /var/log/security_now_digest.log 2>&1
+
+# Cleanup old news weekly (Sundays at 3 AM)
+0 3 * * 0 v cd /home/v/ChicagoNomadNet && $VENV -m projects.security_now.news.news_fetcher --cleanup 30 >> /var/log/security_now_cleanup.log 2>&1
