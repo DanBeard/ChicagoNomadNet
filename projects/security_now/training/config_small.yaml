@@ -33,6 +33,3 @@ max_seq_length: 2048     # Can use full length with small model
 adapter_path: "./adapters/security_now_3b_v1"
 save_every: 500          # Save checkpoint every N iterations
 val_every: 100           # Validate every N iterations
-
-# Logging
-report_to: "none"        # No external logging
