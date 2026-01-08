@@ -2,10 +2,12 @@
 Scrape Security Now! transcripts from grc.com.
 
 Transcripts are available at: https://www.grc.com/sn/sn-{episode}.txt
-Episodes numbered from 1 to current (~1059+).
+Early episodes (1-999) use zero-padded numbers: sn-001.txt, sn-099.txt
+Episodes 1000+ use plain numbers: sn-1000.txt
 """
 import os
 import time
+import random
 import requests
 from pathlib import Path
 from typing import Optional
@@ -18,23 +20,32 @@ BASE_URL = "https://www.grc.com/sn/sn-{episode}.txt"
 USER_AGENT = "SecurityNow-Transcript-Scraper/1.0 (NomadNet project; polite scraping)"
 
 
+def format_episode_number(episode: int) -> str:
+    """Format episode number for URL - zero-padded for episodes < 1000."""
+    if episode < 1000:
+        return f"{episode:03d}"
+    return str(episode)
+
+
 def get_transcript_path(episode: int, output_dir: Path) -> Path:
     """Get the local path for a transcript file."""
     return output_dir / f"sn-{episode:04d}.txt"
 
 
-def scrape_transcript(episode: int, delay: float = 1.0) -> Optional[str]:
+def scrape_transcript(episode: int, min_delay: float = 1.0, max_delay: float = 3.0) -> Optional[str]:
     """
     Fetch a single transcript from GRC.
 
     Args:
         episode: Episode number (1-based)
-        delay: Seconds to wait after request (be polite to GRC servers)
+        min_delay: Minimum seconds to wait after request
+        max_delay: Maximum seconds to wait after request
 
     Returns:
         Transcript text or None if not found
     """
-    url = BASE_URL.format(episode=episode)
+    episode_str = format_episode_number(episode)
+    url = BASE_URL.format(episode=episode_str)
     headers = {"User-Agent": USER_AGENT}
 
     try:
@@ -54,7 +65,9 @@ def scrape_transcript(episode: int, delay: float = 1.0) -> Optional[str]:
             logger.warning(f"Episode {episode}: Content doesn't look like a transcript")
             return None
 
-        time.sleep(delay)  # Be polite
+        # Random delay to be polite to GRC servers
+        delay = random.uniform(min_delay, max_delay)
+        time.sleep(delay)
         return content
 
     except requests.RequestException as e:
@@ -62,7 +75,8 @@ def scrape_transcript(episode: int, delay: float = 1.0) -> Optional[str]:
         return None
 
 
-def scrape_range(start: int, end: int, output_dir: Path, delay: float = 1.0,
+def scrape_range(start: int, end: int, output_dir: Path,
+                 min_delay: float = 1.0, max_delay: float = 3.0,
                  skip_existing: bool = True) -> dict:
     """
     Scrape a range of episodes.
@@ -71,7 +85,8 @@ def scrape_range(start: int, end: int, output_dir: Path, delay: float = 1.0,
         start: First episode number
         end: Last episode number (inclusive)
         output_dir: Directory to save transcripts
-        delay: Seconds between requests
+        min_delay: Minimum seconds between requests
+        max_delay: Maximum seconds between requests
         skip_existing: Skip episodes that already have local files
 
     Returns:
@@ -90,7 +105,7 @@ def scrape_range(start: int, end: int, output_dir: Path, delay: float = 1.0,
             continue
 
         logger.info(f"Scraping episode {episode}...")
-        content = scrape_transcript(episode, delay)
+        content = scrape_transcript(episode, min_delay, max_delay)
 
         if content is None:
             # Check if it's a 404 vs other error
@@ -117,7 +132,8 @@ def get_latest_episode() -> int:
 
     while low < high:
         mid = (low + high + 1) // 2
-        url = BASE_URL.format(episode=mid)
+        episode_str = format_episode_number(mid)
+        url = BASE_URL.format(episode=episode_str)
 
         try:
             response = requests.head(url, timeout=10)
@@ -128,7 +144,7 @@ def get_latest_episode() -> int:
         except requests.RequestException:
             high = mid - 1
 
-        time.sleep(0.5)
+        time.sleep(random.uniform(0.3, 0.7))
 
     return low
 
@@ -141,7 +157,8 @@ def main():
     parser.add_argument("--start", type=int, default=1, help="Starting episode number")
     parser.add_argument("--end", type=int, default=None, help="Ending episode (default: auto-detect)")
     parser.add_argument("--output", type=str, default="./transcripts", help="Output directory")
-    parser.add_argument("--delay", type=float, default=1.0, help="Delay between requests (seconds)")
+    parser.add_argument("--min-delay", type=float, default=1.0, help="Minimum delay between requests (seconds)")
+    parser.add_argument("--max-delay", type=float, default=3.0, help="Maximum delay between requests (seconds)")
     parser.add_argument("--no-skip", action="store_true", help="Re-download existing files")
 
     args = parser.parse_args()
@@ -155,12 +172,14 @@ def main():
 
     logger.info(f"Scraping episodes {args.start} to {args.end}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Random delay: {args.min_delay}-{args.max_delay}s between requests")
 
     stats = scrape_range(
         args.start,
         args.end,
         output_dir,
-        delay=args.delay,
+        min_delay=args.min_delay,
+        max_delay=args.max_delay,
         skip_existing=not args.no_skip
     )
 
