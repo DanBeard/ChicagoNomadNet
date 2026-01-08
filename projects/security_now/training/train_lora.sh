@@ -58,7 +58,7 @@ echo ""
 cd "$PROJECT_DIR"
 
 # Run MLX-LM LoRA training using config file
-python3 -m mlx_lm.lora --config "$CONFIG"
+python3 -m mlx_lm.lora --train --config "$CONFIG"
 
 echo ""
 echo "=== Training Complete ==="
