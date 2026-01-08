@@ -26,7 +26,7 @@ class LlamaClient:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
         temperature: float = 0.7,
         top_p: float = 0.9,
         stop: Optional[list[str]] = None

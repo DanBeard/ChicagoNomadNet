@@ -57,7 +57,7 @@ def generate_digest_content(news_items: list[dict]) -> str:
         content = client.generate(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT,
-            max_tokens=4096,
+            max_tokens=8192,
             temperature=0.7
         )
 
