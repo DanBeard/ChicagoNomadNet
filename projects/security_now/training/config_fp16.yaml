@@ -1,0 +1,32 @@
+# MLX-LM LoRA Training - FP16 BASE MODEL
+#
+# Use this if you want clean GGUF export (no q4->fp16->q4 round trip)
+# REQUIRES: Close ALL apps, ~40-50GB RAM needed
+#
+# Run: ./train_lora.sh config_fp16.yaml
+
+# Model - full precision for clean export
+model: "mistralai/Mistral-7B-Instruct-v0.3"
+
+# LoRA configuration - minimal to save memory
+lora_layers: 4           # Very few layers
+lora_rank: 8             # Small rank
+lora_alpha: 16           # 2x rank
+lora_dropout: 0.05
+
+# Training - ultra conservative memory settings
+batch_size: 1            # Minimum
+learning_rate: 2.0e-5
+iters: 2000
+warmup_steps: 100
+weight_decay: 0.01
+grad_checkpoint: true    # Essential for memory
+
+# Data - short sequences to save memory
+data: "./training_data"
+max_seq_length: 512      # Very short - saves a lot of memory
+
+# Output
+adapter_path: "./adapters/security_now_fp16_v1"
+save_every: 500
+val_every: 100
