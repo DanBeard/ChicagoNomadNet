@@ -9,23 +9,24 @@
 # Model - Qwen2.5 1.5B for fast inference
 model: "Qwen/Qwen2.5-1.5B-Instruct"
 
-# LoRA configuration - can be slightly more aggressive with small model
-lora_layers: 8           # More layers since model is small
-lora_rank: 16            # Slightly higher rank
-lora_alpha: 32           # 2x rank
+# LoRA configuration - balanced for memory
+lora_layers: 4           # Fewer layers = less memory
+lora_rank: 8             # Smaller rank = less memory
+lora_alpha: 16           # 2x rank
 lora_dropout: 0.05
 
-# Training
-batch_size: 2            # Can increase with smaller model
+# Training - conservative memory settings
+batch_size: 1            # Keep at 1 to save memory
 learning_rate: 2.0e-5
 iters: 2000
 warmup_steps: 100
 weight_decay: 0.01
-grad_checkpoint: true
+grad_checkpoint: true    # Essential for memory
 
-# Data - can handle longer sequences with small model
+# Data - use pre-split data for lower memory usage
+# Run: python training/split_long_sequences.py ./training_data --max-tokens 512
 data: "./training_data"
-max_seq_length: 1024
+max_seq_length: 512      # Shorter sequences = less memory
 
 # Output
 adapter_path: "./adapters/security_now_qwen1.5b_v1"
