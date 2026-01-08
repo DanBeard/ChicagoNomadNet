@@ -68,14 +68,18 @@ if [ "$QUANT" != "f16" ]; then
     echo ""
     echo "Step 3: Quantizing to $QUANT..."
 
-    # Check if llama-quantize exists
-    if [ ! -f "$LLAMA_CPP/llama-quantize" ]; then
+    # Find llama-quantize (cmake puts it in build/bin/, older make builds in root)
+    if [ -f "$LLAMA_CPP/build/bin/llama-quantize" ]; then
+        QUANTIZE_BIN="$LLAMA_CPP/build/bin/llama-quantize"
+    elif [ -f "$LLAMA_CPP/llama-quantize" ]; then
+        QUANTIZE_BIN="$LLAMA_CPP/llama-quantize"
+    else
         echo "ERROR: llama-quantize not found. Build llama.cpp first:"
-        echo "  cd $LLAMA_CPP && make -j"
+        echo "  cd $LLAMA_CPP && cmake -B build && cmake --build build --config Release -j"
         exit 1
     fi
 
-    "$LLAMA_CPP/llama-quantize" "$FP16_FILE" "$OUTPUT_FILE" "$QUANT"
+    "$QUANTIZE_BIN" "$FP16_FILE" "$OUTPUT_FILE" "$QUANT"
 
     # Remove intermediate fp16 file
     rm -f "$FP16_FILE"
