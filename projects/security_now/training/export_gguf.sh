@@ -22,7 +22,8 @@ OUTPUT_NAME="${1:-security_now_mistral7b}"
 QUANT="${2:-q4_k_m}"
 
 LLAMA_CPP="${LLAMA_CPP_PATH:-$HOME/llama.cpp}"
-BASE_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
+# Use the same 4-bit model we trained on
+BASE_MODEL="mlx-community/Mistral-7B-Instruct-v0.3-4bit"
 ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_v1"
 FUSED_PATH="$PROJECT_DIR/fused_model"
 OUTPUT_FILE="$PROJECT_DIR/${OUTPUT_NAME}.gguf"
@@ -52,8 +53,7 @@ echo "Step 1: Fusing adapter into base model..."
 python3 -m mlx_lm.fuse \
     --model "$BASE_MODEL" \
     --adapter-path "$ADAPTER_PATH" \
-    --save-path "$FUSED_PATH" \
-    --de-quantize
+    --save-path "$FUSED_PATH"
 
 echo ""
 echo "Step 2: Converting to GGUF format..."
