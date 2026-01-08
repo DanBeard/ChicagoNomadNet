@@ -7,12 +7,13 @@
 # Prerequisites:
 #   pip install mlx-lm
 #   git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
+#   cd ~/llama.cpp && make -j
 #   pip install -r ~/llama.cpp/requirements.txt
 #
 # Usage:
 #   ./export_gguf.sh [output_name] [quantization]
 #
-# Quantization options: f16, q8_0, q4_k_m (default), q4_0
+# Quantization options: f16, q8_0, q4_k_m (default), q4_0, q5_k_m
 
 set -e
 
@@ -26,6 +27,7 @@ LLAMA_CPP="${LLAMA_CPP_PATH:-$HOME/llama.cpp}"
 BASE_MODEL="mlx-community/Mistral-7B-Instruct-v0.3-4bit"
 ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_v1"
 FUSED_PATH="$PROJECT_DIR/fused_model"
+FP16_FILE="$PROJECT_DIR/${OUTPUT_NAME}-f16.gguf"
 OUTPUT_FILE="$PROJECT_DIR/${OUTPUT_NAME}.gguf"
 
 echo "=== Security Now! GGUF Export ==="
@@ -56,10 +58,31 @@ python3 -m mlx_lm.fuse \
     --save-path "$FUSED_PATH"
 
 echo ""
-echo "Step 2: Converting to GGUF format..."
+echo "Step 2: Converting to GGUF (fp16)..."
 python3 "$LLAMA_CPP/convert_hf_to_gguf.py" "$FUSED_PATH" \
-    --outfile "$OUTPUT_FILE" \
-    --outtype "$QUANT"
+    --outfile "$FP16_FILE" \
+    --outtype "f16"
+
+# If quantization requested (not f16), run llama-quantize
+if [ "$QUANT" != "f16" ]; then
+    echo ""
+    echo "Step 3: Quantizing to $QUANT..."
+
+    # Check if llama-quantize exists
+    if [ ! -f "$LLAMA_CPP/llama-quantize" ]; then
+        echo "ERROR: llama-quantize not found. Build llama.cpp first:"
+        echo "  cd $LLAMA_CPP && make -j"
+        exit 1
+    fi
+
+    "$LLAMA_CPP/llama-quantize" "$FP16_FILE" "$OUTPUT_FILE" "$QUANT"
+
+    # Remove intermediate fp16 file
+    rm -f "$FP16_FILE"
+else
+    # Just rename if f16 was requested
+    mv "$FP16_FILE" "$OUTPUT_FILE"
+fi
 
 echo ""
 echo "=== Export Complete ==="
