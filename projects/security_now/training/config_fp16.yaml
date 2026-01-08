@@ -1,12 +1,13 @@
-# MLX-LM LoRA Training - Llama 3.2 1B (fast CPU inference)
+# MLX-LM LoRA Training - Qwen2.5 1.5B (fast CPU inference)
 #
 # Small model for fast CPU-only inference in production.
+# No HuggingFace login required (Apache 2.0 license).
 # Should only need ~8GB RAM for training.
 #
 # Run: ./train_lora.sh config_fp16.yaml
 
-# Model - Llama 3.2 1B for fast inference
-model: "meta-llama/Llama-3.2-1B-Instruct"
+# Model - Qwen2.5 1.5B for fast inference
+model: "Qwen/Qwen2.5-1.5B-Instruct"
 
 # LoRA configuration - can be slightly more aggressive with small model
 lora_layers: 8           # More layers since model is small
@@ -27,6 +28,6 @@ data: "./training_data"
 max_seq_length: 1024
 
 # Output
-adapter_path: "./adapters/security_now_llama1b_v1"
+adapter_path: "./adapters/security_now_qwen1.5b_v1"
 save_every: 500
 val_every: 100
