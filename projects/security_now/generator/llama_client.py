@@ -59,7 +59,7 @@ class LlamaClient:
             response = requests.post(
                 f"{self.base_url}/completion",
                 json=payload,
-                timeout=300  # 5 minute timeout for long generations
+                timeout=600  # 10 minute timeout for long generations
             )
             response.raise_for_status()
 
@@ -92,7 +92,7 @@ class LlamaClient:
             response = requests.post(
                 f"{self.base_url}/v1/chat/completions",
                 json=payload,
-                timeout=300
+                timeout=600  # 10 minute timeout
             )
             response.raise_for_status()
 
