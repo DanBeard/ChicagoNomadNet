@@ -5,9 +5,14 @@
 #   pip install mlx-lm
 #
 # Usage:
-#   ./train_lora.sh [config.yaml]
+#   ./train_lora.sh              # Use default config (Mistral 7B 4-bit, memory-optimized)
+#   ./train_lora.sh config_small.yaml  # Use Llama 3.2 3B if still OOM
 #
-# This script is designed to run on the Mac M1 Max workstation.
+# Memory tips:
+#   - Close browser and other apps if you get OOM errors
+#   - config.yaml: Mistral 7B 4-bit, ~20GB RAM needed
+#   - config_small.yaml: Llama 3.2 3B 4-bit, ~8GB RAM needed
+#
 # Trigger remotely from Linux:
 #   ssh mac "cd ~/security_now && ./training/train_lora.sh"
 
@@ -43,28 +48,28 @@ if ! python3 -c "import mlx_lm" 2>/dev/null; then
     exit 1
 fi
 
-echo "Starting LoRA training..."
+# Show memory tip
+echo "TIP: If you get OOM errors, close browser/apps or use config_small.yaml"
+echo ""
+echo "Starting LoRA training with config: $(basename $CONFIG)"
 echo "This will take several hours on M1 Max."
 echo ""
 
 cd "$PROJECT_DIR"
 
-# Run MLX-LM LoRA training
-python3 -m mlx_lm.lora \
-    --train \
-    --model "mistralai/Mistral-7B-Instruct-v0.3" \
-    --data "./training_data" \
-    --batch-size 4 \
-    --num-layers 16 \
-    --iters 2000 \
-    --learning-rate 1e-5 \
-    --adapter-path "./adapters/security_now_v1" \
-    --save-every 500
+# Run MLX-LM LoRA training using config file
+python3 -m mlx_lm.lora --config "$CONFIG"
 
 echo ""
 echo "=== Training Complete ==="
-echo "Adapter saved to: $PROJECT_DIR/adapters/security_now_v1"
+
+# Determine adapter path from config
+ADAPTER_PATH=$(grep "adapter_path:" "$CONFIG" | awk '{print $2}' | tr -d '"')
+MODEL=$(grep "^model:" "$CONFIG" | awk '{print $2}' | tr -d '"')
+
+echo "Adapter saved to: $PROJECT_DIR/$ADAPTER_PATH"
 echo ""
 echo "Next steps:"
-echo "  1. Test the adapter: python3 -m mlx_lm.generate --model mistralai/Mistral-7B-Instruct-v0.3 --adapter-path ./adapters/security_now_v1"
+echo "  1. Test the adapter:"
+echo "     python3 -m mlx_lm.generate --model $MODEL --adapter-path $ADAPTER_PATH --prompt 'Explain TLS certificates'"
 echo "  2. Export to GGUF: ./training/export_gguf.sh"

@@ -1,0 +1,38 @@
+# MLX-LM LoRA Training Configuration - SMALL MODEL
+#
+# Base model: Llama 3.2 3B Instruct (4-bit quantized)
+# Use this if Mistral 7B still runs out of memory
+#
+# Run on Mac M1 Max (64GB RAM):
+#   mlx_lm.lora --config config_small.yaml
+#
+# This should work even with lots of apps open
+
+# Model - tiny footprint (~2GB)
+model: "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+# LoRA configuration - can be more aggressive with small model
+lora_layers: 12          # More layers since model is smaller
+lora_rank: 16            # Higher rank for better quality
+lora_alpha: 32           # LoRA scaling factor
+lora_dropout: 0.05       # Dropout for regularization
+
+# Training hyperparameters
+batch_size: 4            # Can use larger batch with small model
+learning_rate: 2.0e-5    # Standard LR
+iters: 3000              # More iterations to compensate for smaller model
+warmup_steps: 150        # LR warmup
+weight_decay: 0.01       # L2 regularization
+grad_checkpoint: true    # Keep enabled anyway
+
+# Data
+data: "./training_data"  # Directory with train.jsonl and valid.jsonl
+max_seq_length: 2048     # Can use full length with small model
+
+# Output
+adapter_path: "./adapters/security_now_3b_v1"
+save_every: 500          # Save checkpoint every N iterations
+val_every: 100           # Validate every N iterations
+
+# Logging
+report_to: "none"        # No external logging

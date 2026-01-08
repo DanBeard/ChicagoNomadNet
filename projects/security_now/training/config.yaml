@@ -1,23 +1,26 @@
 # MLX-LM LoRA Training Configuration for Security Now! Model
 #
-# Base model: Mistral 7B Instruct v0.3
+# Base model: Mistral 7B Instruct v0.3 (4-bit quantized)
 # Target: Capture Steve Gibson's explanatory style
 #
 # Run on Mac M1 Max (64GB RAM):
 #   mlx_lm.lora --config config.yaml
+#
+# Memory-optimized settings - should work with browser open
+# For even lower memory, use config_small.yaml with Llama 3.2 3B
 
-# Model
-model: "mistralai/Mistral-7B-Instruct-v0.3"
+# Model - use 4-bit quantized version to save ~10GB RAM
+model: "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
 
 # LoRA configuration
-lora_layers: 16          # Number of layers to apply LoRA (more = better but slower)
-lora_rank: 16            # Rank of LoRA matrices (higher = more capacity)
-lora_alpha: 32           # LoRA scaling factor
+lora_layers: 8           # Reduced from 16 - still effective, saves memory
+lora_rank: 8             # Reduced from 16 - good balance of quality/memory
+lora_alpha: 16           # LoRA scaling factor (2x rank is typical)
 lora_dropout: 0.05       # Dropout for regularization
 
-# Training hyperparameters
-batch_size: 4            # Batch size (M1 Max 64GB can handle this)
-learning_rate: 1.0e-5    # Conservative LR for fine-tuning
+# Training hyperparameters - conservative for memory
+batch_size: 1            # Reduced from 4 - biggest memory saver
+learning_rate: 2.0e-5    # Slightly higher LR to compensate for smaller batch
 iters: 2000              # Training iterations
 warmup_steps: 100        # LR warmup
 weight_decay: 0.01       # L2 regularization
@@ -25,7 +28,7 @@ grad_checkpoint: true    # Gradient checkpointing to save memory
 
 # Data
 data: "./training_data"  # Directory with train.jsonl and valid.jsonl
-max_seq_length: 2048     # Max sequence length
+max_seq_length: 1024     # Reduced from 2048 - significant memory savings
 
 # Output
 adapter_path: "./adapters/security_now_v1"
