@@ -23,9 +23,9 @@ OUTPUT_NAME="${1:-security_now_mistral7b}"
 QUANT="${2:-q4_k_m}"
 
 LLAMA_CPP="${LLAMA_CPP_PATH:-$HOME/llama.cpp}"
-# Use the same 4-bit model we trained on
-BASE_MODEL="mlx-community/Mistral-7B-Instruct-v0.3-4bit"
-ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_v1"
+# Use the fp16 base model for clean GGUF export
+BASE_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
+ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_fp16_v1"
 FUSED_PATH="$PROJECT_DIR/fused_model"
 FP16_FILE="$PROJECT_DIR/${OUTPUT_NAME}-f16.gguf"
 OUTPUT_FILE="$PROJECT_DIR/${OUTPUT_NAME}.gguf"
