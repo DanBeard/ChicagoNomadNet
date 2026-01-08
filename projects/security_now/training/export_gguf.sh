@@ -19,13 +19,13 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-OUTPUT_NAME="${1:-security_now_mistral7b}"
+OUTPUT_NAME="${1:-security_now_llama1b}"
 QUANT="${2:-q4_k_m}"
 
 LLAMA_CPP="${LLAMA_CPP_PATH:-$HOME/llama.cpp}"
-# Use the fp16 base model for clean GGUF export
-BASE_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
-ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_fp16_v1"
+# Llama 3.2 1B - fast CPU inference
+BASE_MODEL="meta-llama/Llama-3.2-1B-Instruct"
+ADAPTER_PATH="$PROJECT_DIR/adapters/security_now_llama1b_v1"
 FUSED_PATH="$PROJECT_DIR/fused_model"
 FP16_FILE="$PROJECT_DIR/${OUTPUT_NAME}-f16.gguf"
 OUTPUT_FILE="$PROJECT_DIR/${OUTPUT_NAME}.gguf"

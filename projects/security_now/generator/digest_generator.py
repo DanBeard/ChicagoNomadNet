@@ -54,9 +54,12 @@ def generate_digest_content(news_items: list[dict]) -> str:
 
     try:
         logger.info("Generating digest with LLM...")
-        content = client.generate(
-            prompt=prompt,
-            system_prompt=SYSTEM_PROMPT,
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
+        content = client.chat(
+            messages=messages,
             max_tokens=8192,
             temperature=0.7
         )
