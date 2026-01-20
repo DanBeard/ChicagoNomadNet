@@ -26,7 +26,7 @@ class ZimBotConfig:
     context_window: int = int(os.getenv("ZIMBOT_CONTEXT_WINDOW", "2048"))
     
     # RAG Settings
-    retrieval_k: int = int(os.getenv("ZIMBOT_RETRIEVAL_K", "5"))
+    retrieval_k: int = int(os.getenv("ZIMBOT_RETRIEVAL_K", "3"))
     chunk_size: int = int(os.getenv("ZIMBOT_CHUNK_SIZE", "800"))
     chunk_overlap: int = int(os.getenv("ZIMBOT_CHUNK_OVERLAP", "100"))
     
@@ -44,7 +44,23 @@ class ZimBotConfig:
     chunk_queue_size: int = int(os.getenv("ZIMBOT_CHUNK_QUEUE_SIZE", "2000"))
     embed_batch_size: int = int(os.getenv("ZIMBOT_EMBED_BATCH_SIZE", "256"))
     embed_timeout: float = float(os.getenv("ZIMBOT_EMBED_TIMEOUT", "5.0"))
-    
+
+    # Lazy Embedding Settings
+    lazy_embedding_enabled: bool = os.getenv("ZIMBOT_LAZY_EMBEDDING", "1") == "1"
+    lazy_keywords_count: int = int(os.getenv("ZIMBOT_LAZY_KEYWORDS", "5"))
+    lazy_idle_cpu_threshold: float = float(os.getenv("ZIMBOT_IDLE_CPU", "30.0"))
+    lazy_drip_enabled: bool = os.getenv("ZIMBOT_DRIP_ENABLED", "0") == "1"  # disabled by default
+    lazy_drip_interval: int = int(os.getenv("ZIMBOT_DRIP_INTERVAL", "60"))  # seconds
+    lazy_drip_count: int = int(os.getenv("ZIMBOT_DRIP_COUNT", "3"))  # articles per drip
+    lazy_link_follow_limit: int = int(os.getenv("ZIMBOT_LINK_FOLLOW_LIMIT", "20"))  # max links per article
+    skip_startup_indexing: bool = os.getenv("ZIMBOT_SKIP_INDEXING", "1") == "1"  # skip upfront indexing
+
+    # FAISS Index Settings
+    faiss_nprobe: int = int(os.getenv("ZIMBOT_FAISS_NPROBE", "64"))  # clusters to search (accuracy vs speed)
+
+    # Conversation History Settings
+    max_conversation_messages: int = int(os.getenv("ZIMBOT_MAX_CONV_MESSAGES", "6"))
+
     def validate(self):
         """Validate configuration values."""
         if self.n_threads < 1:

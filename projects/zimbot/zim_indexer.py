@@ -25,6 +25,7 @@ from sentence_transformers import SentenceTransformer
 from zimfast import ZimReader as ZimFastReader
 
 from .config import ZimBotConfig
+from .faiss_index import FAISSIndex
 
 
 @dataclass
@@ -129,6 +130,10 @@ class ZIMIndexer:
         self.archive_paths: List[str] = []
         self.archive_names: List[str] = []
 
+        # FAISS index for fast vector search
+        self.faiss_index: Optional[FAISSIndex] = None
+        self.use_faiss = True  # Use FAISS if available, fallback to sqlite-vec
+
         # Threading state
         self.model: Optional[SentenceTransformer] = None
         self.raw_queue: Optional[queue.Queue] = None
@@ -176,10 +181,117 @@ class ZIMIndexer:
                 doc_id TEXT PRIMARY KEY,
                 embedding float[{self.EMBEDDING_DIM}]
             );
+
+            -- Lazy embedding queue (persists across restarts)
+            CREATE TABLE IF NOT EXISTS embedding_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT,
+                source_type TEXT NOT NULL CHECK(source_type IN ('conversation', 'link', 'drip')),
+                priority INTEGER DEFAULT 5 CHECK(priority BETWEEN 1 AND 10),
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'completed', 'failed')),
+                archive_idx INTEGER,
+                article_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP,
+                articles_found INTEGER DEFAULT 0,
+                chunks_embedded INTEGER DEFAULT 0,
+                error_message TEXT
+            );
+
+            -- Indexes for efficient queue processing
+            CREATE INDEX IF NOT EXISTS idx_queue_status_priority
+                ON embedding_queue(status, priority DESC, created_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_queue_keyword
+                ON embedding_queue(keyword, archive_idx);
+
+            -- Track which articles have been embedded (deduplication)
+            CREATE TABLE IF NOT EXISTS embedded_articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                archive_idx INTEGER NOT NULL,
+                article_path TEXT NOT NULL,
+                embedded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                chunk_count INTEGER DEFAULT 0,
+                source_keyword TEXT,
+                UNIQUE(archive_idx, article_path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_embedded_archive
+                ON embedded_articles(archive_idx);
         ''')
         self.conn.commit()
         print(f"SQLite database initialized: {self.config.sqlite_db_path}")
-        
+
+        # Try to load FAISS index for fast vector search
+        self._init_faiss_index()
+
+    def _init_faiss_index(self):
+        """Initialize FAISS index for fast vector search."""
+        # Derive FAISS paths from SQLite path
+        db_path = self.config.sqlite_db_path
+        faiss_index_path = db_path.replace('.db', '_faiss.index')
+        faiss_ids_path = db_path.replace('.db', '_faiss_ids.json')
+
+        self.faiss_index = FAISSIndex(
+            dim=self.EMBEDDING_DIM,
+            index_path=faiss_index_path,
+            id_map_path=faiss_ids_path
+        )
+
+        # Try to load existing index
+        if self.faiss_index.load():
+            self.use_faiss = True
+            self.faiss_index.nprobe = self.config.faiss_nprobe
+            print(f"FAISS index loaded: {self.faiss_index.index.ntotal:,} vectors, nprobe={self.config.faiss_nprobe}")
+        else:
+            self.use_faiss = False
+            print("FAISS index not found - using sqlite-vec (slow). "
+                  "Run migrate_to_faiss.py to build the FAISS index.")
+
+    def _fetch_docs_by_ids(self, doc_ids: List[str], similarities: List[float]) -> List[Dict]:
+        """
+        Fetch document metadata from SQLite by IDs.
+
+        Args:
+            doc_ids: List of document IDs
+            similarities: List of similarity scores (from FAISS)
+
+        Returns:
+            List of result dictionaries with content, metadata, and distance
+        """
+        if not doc_ids:
+            return []
+
+        # Fetch from SQLite
+        placeholders = ','.join('?' * len(doc_ids))
+        rows = self.conn.execute(f'''
+            SELECT id, content, archive, path, title, mimetype, chunk, total_chunks
+            FROM documents WHERE id IN ({placeholders})
+        ''', doc_ids).fetchall()
+
+        # Build lookup dict
+        row_dict = {row[0]: row for row in rows}
+
+        # Build results preserving order and including similarity scores
+        results = []
+        for doc_id, sim in zip(doc_ids, similarities):
+            if doc_id in row_dict:
+                row = row_dict[doc_id]
+                results.append({
+                    'content': row[1],
+                    'metadata': {
+                        'archive': row[2],
+                        'path': row[3],
+                        'title': row[4],
+                        'mimetype': row[5],
+                        'chunk': row[6],
+                        'total_chunks': row[7]
+                    },
+                    'distance': float(1.0 - sim),  # Convert similarity to distance
+                    'id': row[0]
+                })
+
+        return results
+
     def load_archives(self) -> List[str]:
         """Load ZIM archives from the configured path."""
         if not os.path.exists(self.config.zim_path):
@@ -569,9 +681,13 @@ class ZIMIndexer:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', doc_rows)
 
+        # Delete existing vectors first (sqlite-vec doesn't support INSERT OR REPLACE)
+        placeholders = ','.join('?' * len(ids))
+        self.conn.execute(f'DELETE FROM vec_documents WHERE doc_id IN ({placeholders})', ids)
+
         # Batch insert vectors
         self.conn.executemany('''
-            INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+            INSERT INTO vec_documents (doc_id, embedding)
             VALUES (?, ?)
         ''', vec_rows)
 
@@ -591,10 +707,31 @@ class ZIMIndexer:
             self.model = SentenceTransformer(self.config.embedding_model)
 
         # Generate query embedding
+        embed_start = time.time()
         query_embedding = self.model.encode(
             [query],
             normalize_embeddings=True
         )[0]
+        embed_time = time.time() - embed_start
+
+        # Use FAISS for fast search if available
+        if self.use_faiss and self.faiss_index and self.faiss_index.index:
+            search_start = time.time()
+            doc_ids, similarities = self.faiss_index.search(query_embedding, k)
+            search_time = time.time() - search_start
+
+            # Fetch metadata from SQLite
+            fetch_start = time.time()
+            results = self._fetch_docs_by_ids(doc_ids, similarities.tolist())
+            fetch_time = time.time() - fetch_start
+
+            print(f"  Search timing: embed={embed_time:.3f}s, "
+                  f"faiss={search_time:.3f}s, fetch={fetch_time:.3f}s")
+            return results
+
+        # Fallback to sqlite-vec (slow brute-force search)
+        print(f"  Warning: Using sqlite-vec brute-force search (slow)")
+        search_start = time.time()
 
         # Convert to binary format
         query_bytes = struct.pack(f'{len(query_embedding)}f', *query_embedding)
@@ -616,6 +753,9 @@ class ZIMIndexer:
             WHERE v.embedding MATCH ? AND v.k = ?
             ORDER BY v.distance
         ''', (query_bytes, k)).fetchall()
+
+        search_time = time.time() - search_start
+        print(f"  Search timing: embed={embed_time:.3f}s, sqlite-vec={search_time:.3f}s")
 
         formatted_results = []
         for row in results:
@@ -651,6 +791,109 @@ class ZIMIndexer:
                 "retrieval_k": self.config.retrieval_k
             }
         }
+
+    # ========== Lazy Embedding Helper Methods ==========
+
+    def is_article_embedded(self, archive_idx: int, article_path: str) -> bool:
+        """Check if an article has already been embedded."""
+        if not self.conn:
+            return False
+        cursor = self.conn.execute(
+            "SELECT 1 FROM embedded_articles WHERE archive_idx = ? AND article_path = ?",
+            (archive_idx, article_path)
+        )
+        return cursor.fetchone() is not None
+
+    def mark_article_embedded(self, archive_idx: int, article_path: str,
+                               chunk_count: int, source_keyword: Optional[str] = None):
+        """Mark an article as embedded in the tracking table."""
+        if not self.conn:
+            return
+        self.conn.execute('''
+            INSERT OR REPLACE INTO embedded_articles
+            (archive_idx, article_path, chunk_count, source_keyword)
+            VALUES (?, ?, ?, ?)
+        ''', (archive_idx, article_path, chunk_count, source_keyword))
+        self.conn.commit()
+
+    def embed_single_article(self, archive_idx: int, article_path: str,
+                              content: str, title: str,
+                              source_keyword: Optional[str] = None) -> int:
+        """
+        Embed a single article into the vector database.
+        Returns the number of chunks embedded.
+        """
+        if not self.conn:
+            raise RuntimeError("Database not initialized")
+
+        # Ensure model is loaded
+        if self.model is None:
+            print(f"Loading embedding model: {self.config.embedding_model}")
+            self.model = SentenceTransformer(self.config.embedding_model)
+
+        # Extract text if HTML
+        if '<html' in content.lower() or '<body' in content.lower():
+            text = self._extract_text_from_html(content)
+        else:
+            text = content
+
+        if len(text) <= 50:
+            return 0
+
+        # Chunk the text
+        chunks = self._chunk_text(text, self.config.chunk_size, self.config.chunk_overlap)
+
+        if not chunks:
+            return 0
+
+        # Generate unique IDs for each chunk
+        archive_name = self.archive_names[archive_idx] if archive_idx < len(self.archive_names) else f"archive_{archive_idx}"
+        safe_path = article_path.replace('/', '_').replace('\\', '_')[:50]
+
+        documents = []
+        metadatas = []
+        ids = []
+
+        for chunk_idx, chunk_text in enumerate(chunks):
+            doc_id = f"lazy_{archive_name}_{safe_path}_{chunk_idx}"
+            documents.append(chunk_text)
+            metadatas.append({
+                "archive": archive_name,
+                "path": article_path,
+                "title": title,
+                "mimetype": "text/html",
+                "chunk": chunk_idx,
+                "total_chunks": len(chunks)
+            })
+            ids.append(doc_id)
+
+        # Embed and store
+        self._add_batch_to_chroma(documents, metadatas, ids)
+
+        # Mark as embedded
+        self.mark_article_embedded(archive_idx, article_path, len(chunks), source_keyword)
+
+        return len(chunks)
+
+    def get_embedding_queue_stats(self) -> Dict:
+        """Get statistics about the embedding queue."""
+        if not self.conn:
+            return {"status": "not_initialized"}
+
+        stats = {}
+        for status in ['pending', 'in_progress', 'completed', 'failed']:
+            count = self.conn.execute(
+                "SELECT COUNT(*) FROM embedding_queue WHERE status = ?",
+                (status,)
+            ).fetchone()[0]
+            stats[status] = count
+
+        embedded_count = self.conn.execute(
+            "SELECT COUNT(*) FROM embedded_articles"
+        ).fetchone()[0]
+        stats['articles_embedded'] = embedded_count
+
+        return stats
 
     # ========== Threaded Indexing Methods ==========
 
@@ -870,9 +1113,13 @@ class ZIMIndexer:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', doc_rows)
 
+        # Delete existing vectors first (sqlite-vec doesn't support INSERT OR REPLACE)
+        placeholders = ','.join('?' * len(ids))
+        self.conn.execute(f'DELETE FROM vec_documents WHERE doc_id IN ({placeholders})', ids)
+
         # Batch insert vectors
         self.conn.executemany('''
-            INSERT OR REPLACE INTO vec_documents (doc_id, embedding)
+            INSERT INTO vec_documents (doc_id, embedding)
             VALUES (?, ?)
         ''', vec_rows)
 

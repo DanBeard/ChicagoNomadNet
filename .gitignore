@@ -7,6 +7,9 @@ test_zim/
 tmp_zimbot/
 zimbot.db
 zimbot_hashes.json
+zimbot_faiss.index
+zimbot_faiss_ids.json
+projects/security_now/security_now.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
