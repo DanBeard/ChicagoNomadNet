@@ -58,8 +58,17 @@ class ZimBotConfig:
     # FAISS Index Settings
     faiss_nprobe: int = int(os.getenv("ZIMBOT_FAISS_NPROBE", "64"))  # clusters to search (accuracy vs speed)
 
-    # Conversation History Settings
-    max_conversation_messages: int = int(os.getenv("ZIMBOT_MAX_CONV_MESSAGES", "6"))
+    # Conversation History Settings (20 messages = 10 Q&A exchanges)
+    max_conversation_messages: int = int(os.getenv("ZIMBOT_MAX_CONV_MESSAGES", "20"))
+
+    # Remote Inference Settings
+    # Enable remote inference to offload LLM/embedding work to LMStudio server
+    use_remote_inference: bool = os.getenv("ZIMBOT_REMOTE_INFERENCE", "1") == "1"
+    llm_url: str = os.getenv("ZIMBOT_LLM_URL", "http://10.0.0.89:1234")
+    llm_timeout: int = int(os.getenv("ZIMBOT_LLM_TIMEOUT", "120"))
+    embedding_url: str = os.getenv("ZIMBOT_EMBEDDING_URL", "http://10.0.0.89:1234")
+    # LMStudio model name for embeddings (must match all-MiniLM-L6-v2 384-dim for FAISS compatibility)
+    embedding_remote_model: str = os.getenv("ZIMBOT_EMBEDDING_REMOTE_MODEL", "text-embedding-all-minilm-l6-v2-embedding")
 
     def validate(self):
         """Validate configuration values."""

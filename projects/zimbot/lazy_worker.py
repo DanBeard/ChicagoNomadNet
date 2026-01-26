@@ -6,6 +6,8 @@ Child process that handles background embedding tasks:
 - Connects to zim_host for full-text search
 - Monitors CPU for idle-time drip embedding
 - Extracts and queues internal links from embedded articles
+
+Supports both local (SentenceTransformer) and remote (LMStudio) embeddings.
 """
 
 import os
@@ -16,15 +18,19 @@ import struct
 import traceback
 from multiprocessing import Process, Queue, Event
 from multiprocessing.connection import Client
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 
 import psutil
 import sqlite_vec
-from sentence_transformers import SentenceTransformer
 
 from .config import ZimBotConfig
 from .lazy_queue import LazyEmbeddingQueue, EmbeddingTask
+
+# Import remote embedding client
+import sys
+sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from shared.remote_inference import RemoteEmbedding
 
 
 @dataclass
@@ -210,6 +216,32 @@ def extract_internal_links(content: str, max_links: int = 20) -> List[str]:
     return filtered[:max_links]
 
 
+def init_embedding_model(config: ZimBotConfig) -> Union["SentenceTransformer", RemoteEmbedding]:
+    """Initialize embedding model based on config.
+
+    Returns either a local SentenceTransformer or remote RemoteEmbedding client.
+    """
+    if config.use_remote_inference:
+        print(f"[Worker] Connecting to remote embedding server: {config.embedding_url}")
+        model = RemoteEmbedding(
+            base_url=config.embedding_url,
+            model=config.embedding_remote_model,
+            timeout=60
+        )
+        if model.health_check():
+            print(f"[Worker] Remote embedding server connected (model: {config.embedding_remote_model})")
+            return model
+        else:
+            print(f"[Worker] Warning: Remote server not responding, falling back to local")
+
+    # Fallback to local model
+    from sentence_transformers import SentenceTransformer
+    print(f"[Worker] Loading local embedding model: {config.embedding_model}")
+    model = SentenceTransformer(config.embedding_model)
+    print("[Worker] Local model loaded.")
+    return model
+
+
 def embedding_worker_main(request_queue: Queue, response_queue: Queue,
                           shutdown_event: Event, config: ZimBotConfig):
     """
@@ -230,10 +262,9 @@ def embedding_worker_main(request_queue: Queue, response_queue: Queue,
 
     queue_manager = LazyEmbeddingQueue(conn)
 
-    # Load embedding model
-    print(f"[Worker] Loading embedding model: {config.embedding_model}")
-    model = SentenceTransformer(config.embedding_model)
-    print("[Worker] Model loaded.")
+    # Load embedding model (local or remote based on config)
+    model = init_embedding_model(config)
+    use_remote = isinstance(model, RemoteEmbedding)
 
     # Reset any stale in_progress tasks from previous runs
     queue_manager.reset_stale_tasks()
@@ -348,7 +379,8 @@ def send_status(response_queue: Queue, stats: WorkerStats,
 
 
 def process_task(task: EmbeddingTask, queue_manager: LazyEmbeddingQueue,
-                 conn: sqlite3.Connection, model: SentenceTransformer,
+                 conn: sqlite3.Connection,
+                 model: Union["SentenceTransformer", RemoteEmbedding],
                  config: ZimBotConfig, zim_client: ZimHostClient,
                  stats: WorkerStats):
     """Process a single embedding task."""
@@ -456,7 +488,8 @@ def process_task(task: EmbeddingTask, queue_manager: LazyEmbeddingQueue,
 
 
 def do_drip_embedding(queue_manager: LazyEmbeddingQueue,
-                      conn: sqlite3.Connection, model: SentenceTransformer,
+                      conn: sqlite3.Connection,
+                      model: Union["SentenceTransformer", RemoteEmbedding],
                       config: ZimBotConfig, zim_client: ZimHostClient,
                       stats: WorkerStats):
     """
@@ -501,12 +534,14 @@ def is_article_embedded(conn: sqlite3.Connection, archive_idx: int,
     return cursor.fetchone() is not None
 
 
-def embed_article(conn: sqlite3.Connection, model: SentenceTransformer,
+def embed_article(conn: sqlite3.Connection,
+                  model: Union["SentenceTransformer", RemoteEmbedding],
                   config: ZimBotConfig, archive_idx: int, article_path: str,
                   content: str, title: str,
                   source_keyword: Optional[str]) -> int:
     """
     Embed a single article into the database.
+    Works with both local SentenceTransformer and remote RemoteEmbedding.
     Returns number of chunks embedded.
     """
     # Extract text if HTML

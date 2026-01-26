@@ -15,9 +15,10 @@ class LlamaClient:
         self.base_url = base_url or config.llama_url
 
     def health_check(self) -> bool:
-        """Check if the server is running."""
+        """Check if the server is running (LMStudio-compatible)."""
         try:
-            response = requests.get(f"{self.base_url}/health", timeout=5)
+            # LMStudio uses /v1/models for health check
+            response = requests.get(f"{self.base_url}/v1/models", timeout=5)
             return response.status_code == 200
         except requests.RequestException:
             return False
@@ -32,39 +33,37 @@ class LlamaClient:
         stop: Optional[list[str]] = None
     ) -> str:
         """
-        Generate text completion.
+        Generate text completion using chat API.
 
-        Uses the /completion endpoint for raw text generation.
+        Uses the /v1/chat/completions endpoint for LMStudio compatibility.
         """
-        # Build the full prompt with system message if provided
+        # Build messages array for chat API
+        messages = []
         if system_prompt:
-            full_prompt = (
-                f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
-                f"<|im_start|>user\n{prompt}<|im_end|>\n"
-                f"<|im_start|>assistant\n"
-            )
-        else:
-            full_prompt = prompt
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
         payload = {
-            "prompt": full_prompt,
-            "n_predict": max_tokens,
+            "messages": messages,
+            "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
-            "stop": stop or ["<|im_end|>"],
             "stream": False
         }
 
+        if stop:
+            payload["stop"] = stop
+
         try:
             response = requests.post(
-                f"{self.base_url}/completion",
+                f"{self.base_url}/v1/chat/completions",
                 json=payload,
                 timeout=600  # 10 minute timeout for long generations
             )
             response.raise_for_status()
 
             result = response.json()
-            return result.get("content", "").strip()
+            return result["choices"][0]["message"]["content"].strip()
 
         except requests.RequestException as e:
             logger.error(f"LLM request failed: {e}")

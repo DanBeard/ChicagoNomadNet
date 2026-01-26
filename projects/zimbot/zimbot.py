@@ -6,6 +6,8 @@ and integration with the RAG engine.
 """
 
 import os
+import sys
+import argparse
 import asyncio
 import time
 import traceback
@@ -65,7 +67,7 @@ class ConversationManager:
         """Add a question/answer exchange to history."""
         history = self.get_history(user_hash)
         history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer[:500]})  # Truncate long answers
+        history.append({"role": "assistant", "content": answer[:2000]})  # Truncate very long answers
 
         # Compact if too many messages
         if len(history) > self.max_messages:
@@ -85,26 +87,31 @@ class ConversationManager:
             return history
         return history[-self.max_messages:]
 
-    def format_for_prompt(self, user_hash: str) -> str:
-        """Format conversation history for inclusion in LLM prompt."""
-        history = self.get_history(user_hash)
-        if not history:
-            return ""
+    def get_messages_for_llm(self, user_hash: str) -> List[Dict]:
+        """Get conversation history as chat messages for LLM.
 
-        lines = ["Previous conversation:"]
-        for msg in history[-4:]:  # Last 4 messages only for prompt
-            role = "User" if msg["role"] == "user" else "Bot"
-            content = msg["content"][:200]  # Truncate for prompt
-            lines.append(f"{role}: {content}")
+        Returns the raw message list in OpenAI chat format:
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
+        """
+        return self.get_history(user_hash)
 
-        return "\n".join(lines) + "\n"
+    def clear_history(self, user_hash: str):
+        """Clear conversation history for a user."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "DELETE FROM conversations WHERE user_hash = ?",
+            (user_hash,)
+        )
+        conn.commit()
+        conn.close()
 
 
 class ZimBot:
     """Main ZimBot class handling LXMF communication and RAG integration."""
-    
-    def __init__(self, config: Optional[ZimBotConfig] = None):
+
+    def __init__(self, config: Optional[ZimBotConfig] = None, rns_verbosity: int = 0):
         self.config = config or get_config()
+        self.rns_verbosity = rns_verbosity  # 0=quiet, 4=default, 7=extreme
 
         # RNS/LXMF initialized later (after indexing completes)
         self.rns = None
@@ -153,6 +160,7 @@ COMMANDS:
 /sources - List available archives
 /status - Show bot status
 /mode - Show current mode
+/clear - Clear conversation history
 
 Type /chat to start asking questions!"""
     
@@ -261,8 +269,12 @@ Type /chat to start asking questions!"""
 
         # Now initialize Reticulum and LXMF (after indexing is complete)
         print("Initializing Reticulum network stack...")
-        self.rns = RNS.Reticulum()
+        # Set RNS log level before AND after Reticulum init (constructor may reset it)
+        RNS.loglevel = self.rns_verbosity
+        self.rns = RNS.Reticulum(verbosity=self.rns_verbosity)
+        RNS.loglevel = self.rns_verbosity  # Re-apply in case constructor changed it
         self.router = LXMRouter(storagepath="./tmp_zimbot")
+        RNS.loglevel = self.rns_verbosity  # Re-apply after LXMRouter too
 
         # Set up identity
         self.identity = self._setup_identity()
@@ -376,6 +388,10 @@ Type /chat to start asking questions!"""
         elif cmd == "/mode":
             response = f"Current mode: {user_state.mode.value.upper()}"
 
+        elif cmd == "/clear":
+            self.conversation_manager.clear_history(user_state.user_hash)
+            response = "Conversation history cleared. Starting fresh!"
+
         else:
             response = f"Unknown command: {cmd}. Type /help for available commands."
 
@@ -452,10 +468,10 @@ Type /chat to start asking questions!"""
             try:
                 print(f"Processing question: {question}")
 
-                # Get conversation history for this user
-                conversation_history = self.conversation_manager.format_for_prompt(user_hash)
+                # Get conversation history for this user (as proper chat messages)
+                conversation_history = self.conversation_manager.get_messages_for_llm(user_hash)
                 if conversation_history:
-                    print(f"[Conv History] {len(conversation_history)} chars for user {user_hash[:8]}...")
+                    print(f"[Conv History] {len(conversation_history)} messages for user {user_hash[:8]}...")
 
                 # Generate response using RAG (with conversation context and verbosity preference)
                 verbosity = user_state.preferences.verbosity
@@ -618,18 +634,61 @@ Type /chat to start asking questions!"""
             self._shutdown_worker()
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="ZimBot - LXMF RAG Chatbot over Reticulum",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="count",
+        default=0,
+        help="Increase Reticulum verbosity (can be repeated: -v, -vv, -vvv)"
+    )
+    parser.add_argument(
+        "--rns-verbosity",
+        type=int,
+        choices=range(-1, 8),
+        metavar="-1 to 7",
+        help="Set exact Reticulum log level (-1=none, 0=critical, 4=info, 7=extreme)"
+    )
+    return parser.parse_args()
+
+
 def main():
     """Main entry point."""
+    args = parse_args()
+
+    # Determine RNS verbosity: explicit --rns-verbosity takes precedence over -v count
+    if args.rns_verbosity is not None:
+        rns_verbosity = args.rns_verbosity
+    else:
+        # Map -v flags: -1=none(default), -v=4(info), -vv=5(verbose), -vvv=6(debug), -vvvv=7(extreme)
+        # Using -1 (LOG_NONE) as default to completely suppress RNS logging
+        verbosity_map = {0: -1, 1: 4, 2: 5, 3: 6}
+        rns_verbosity = verbosity_map.get(args.verbose, 7)
+
+    # Set RNS log level BEFORE any RNS initialization happens
+    # This must be done early to suppress logs from shared instance connections
+    RNS.loglevel = rns_verbosity
+    if rns_verbosity < 0:
+        print("RNS logging disabled (use -v to enable)")
+
     try:
         # Create and run the bot
-        bot = ZimBot()
-        
+        bot = ZimBot(rns_verbosity=rns_verbosity)
+
         # Run the bot
         asyncio.run(bot.run())
-        
+
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        sys.exit(0)
     except Exception as e:
         print(f"Fatal error: {e}")
         traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

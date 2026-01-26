@@ -19,8 +19,8 @@ class Config:
     host_port: int = int(os.environ.get("SN_HOST_PORT", "6001"))
     host_address: str = "localhost"
 
-    # LLM inference
-    llama_url: str = os.environ.get("SN_LLAMA_URL", "http://127.0.0.1:8080")
+    # LLM inference (default to remote LMStudio server)
+    llama_url: str = os.environ.get("SN_LLAMA_URL", "http://10.0.0.89:1234")
     model_version: str = os.environ.get("SN_MODEL_VERSION", "v1")
 
     # News settings

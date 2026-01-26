@@ -17,14 +17,27 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== ZimBot Launcher ===${NC}"
 
-# Configuration (override with environment variables)
+# Load .env file if it exists
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    echo -e "${YELLOW}Loading .env file...${NC}"
+    set -a  # automatically export all variables
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Default values (used if not set in .env or environment)
 : "${ZIM_PATH:=/zim/}"
 : "${ZIM_AUTHKEY:=zimbot_auth_key}"
 : "${ZIMBOT_SQLITE_PATH:=./zimbot.db}"
 : "${ZIMBOT_MODEL_PATH:=/media/v/v_storage1/v/llm/zimbot/}"
 : "${ZIMBOT_LAZY_EMBEDDING:=1}"
+: "${ZIMBOT_REMOTE_INFERENCE:=1}"
+: "${ZIMBOT_LLM_URL:=http://10.0.0.89:1234}"
+: "${ZIMBOT_EMBEDDING_URL:=http://10.0.0.89:1234}"
+: "${ZIMBOT_LLM_TIMEOUT:=120}"
 
 export ZIM_PATH ZIM_AUTHKEY ZIMBOT_SQLITE_PATH ZIMBOT_MODEL_PATH ZIMBOT_LAZY_EMBEDDING
+export ZIMBOT_REMOTE_INFERENCE ZIMBOT_LLM_URL ZIMBOT_EMBEDDING_URL ZIMBOT_LLM_TIMEOUT
 
 # Activate venv if it exists
 if [ -f "venv/bin/activate" ]; then
@@ -44,8 +57,20 @@ if [ ! -d "$ZIM_PATH" ]; then
 fi
 
 if [ ! -d "$ZIMBOT_MODEL_PATH" ]; then
-    echo -e "${RED}Warning: ZIMBOT_MODEL_PATH ($ZIMBOT_MODEL_PATH) does not exist${NC}"
-    echo "Set ZIMBOT_MODEL_PATH to directory containing .gguf model files"
+    echo -e "${YELLOW}Note: ZIMBOT_MODEL_PATH ($ZIMBOT_MODEL_PATH) does not exist${NC}"
+    echo "  This is fine if using remote inference (ZIMBOT_REMOTE_INFERENCE=1)"
+fi
+
+# Check remote inference server if enabled
+if [ "$ZIMBOT_REMOTE_INFERENCE" = "1" ]; then
+    echo -e "${YELLOW}Checking remote inference server at $ZIMBOT_LLM_URL...${NC}"
+    if curl -s --max-time 5 "$ZIMBOT_LLM_URL/v1/models" > /dev/null 2>&1; then
+        echo -e "${GREEN}Remote server is reachable${NC}"
+    else
+        echo -e "${RED}Warning: Remote server at $ZIMBOT_LLM_URL is not responding${NC}"
+        echo "  Make sure LMStudio is running on the remote machine"
+        echo "  Set ZIMBOT_REMOTE_INFERENCE=0 to use local models instead"
+    fi
 fi
 
 # Check if port 6000 is already in use (zim_host already running)
@@ -94,10 +119,18 @@ fi
 echo -e "${GREEN}Starting ZimBot...${NC}"
 echo "  ZIM_PATH: $ZIM_PATH"
 echo "  ZIMBOT_SQLITE_PATH: $ZIMBOT_SQLITE_PATH"
-echo "  ZIMBOT_MODEL_PATH: $ZIMBOT_MODEL_PATH"
 echo "  ZIMBOT_LAZY_EMBEDDING: $ZIMBOT_LAZY_EMBEDDING"
+if [ "$ZIMBOT_REMOTE_INFERENCE" = "1" ]; then
+    echo "  Remote Inference: ENABLED"
+    echo "    LLM URL: $ZIMBOT_LLM_URL"
+    echo "    Embedding URL: $ZIMBOT_EMBEDDING_URL"
+else
+    echo "  Remote Inference: DISABLED (using local models)"
+    echo "    Model Path: $ZIMBOT_MODEL_PATH"
+fi
 echo ""
 
-python -m projects.zimbot.zimbot
+# Pass through any command line args (e.g., -v for verbose RNS logging)
+python -m projects.zimbot.zimbot "$@"
 
 # Cleanup will be called by trap

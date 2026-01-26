@@ -4,19 +4,22 @@ RAG Engine
 Handles the Retrieval Augmented Generation pipeline:
 - Query retrieval from SQLite + sqlite-vec
 - Prompt construction with context
-- LLM inference using llama-cpp-python
+- LLM inference using remote LMStudio server
 - Response generation with source attribution
 """
 
-import os
 import re
 import time
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
-from llama_cpp import Llama
 from .config import ZimBotConfig
 from .zim_indexer import ZIMIndexer
+
+# Import remote inference client
+import sys
+sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from shared.remote_inference import RemoteLLM
 
 
 @dataclass
@@ -33,46 +36,37 @@ class RAGResponse:
 
 class RAGEngine:
     """Main RAG engine class."""
-    
+
     def __init__(self, config: ZimBotConfig, indexer: ZIMIndexer):
         self.config = config
         self.indexer = indexer
-        self.llm = None
+        self.llm: Optional[RemoteLLM] = None
         self.model_loaded = False
-        
+
     def load_model(self, model_path: Optional[str] = None):
-        """Load the LLM model."""
-        if model_path is None:
-            # Find the first .gguf file in the model path
-            if not os.path.isdir(self.config.model_path):
-                raise FileNotFoundError(f"Model directory does not exist: {self.config.model_path}")
+        """
+        Connect to remote LLM server.
 
-            model_files = [f for f in os.listdir(self.config.model_path) if f.endswith('.gguf')]
-            if not model_files:
-                raise FileNotFoundError(f"No GGUF model files found in {self.config.model_path}")
+        The model_path parameter is ignored - we use the remote LMStudio server.
+        """
+        print(f"Connecting to remote LLM server: {self.config.llm_url}")
 
-            model_path = os.path.join(self.config.model_path, model_files[0])
-            if len(model_files) > 1:
-                print(f"Found {len(model_files)} models, using: {model_files[0]}")
-
-        print(f"Loading model: {model_path}")
-        file_size_gb = os.path.getsize(model_path) / (1024**3)
-        print(f"  File size: {file_size_gb:.2f} GB")
-        
         try:
-            self.llm = Llama(
-                model_path=model_path,
-                n_threads=self.config.n_threads,
-                n_ctx=self.config.context_window,
-                n_batch=512,
-                verbose=True  # Enable verbose to see llama.cpp errors
+            self.llm = RemoteLLM(
+                base_url=self.config.llm_url,
+                timeout=self.config.llm_timeout
             )
-            self.model_loaded = True
-            print(f"Model loaded successfully!")
+
+            # Test the connection
+            if self.llm.health_check():
+                self.model_loaded = True
+                print(f"Remote LLM server connected successfully!")
+            else:
+                raise ConnectionError(f"Remote LLM server not responding at {self.config.llm_url}")
 
         except Exception as e:
             import traceback
-            print(f"Failed to load model: {e}")
+            print(f"Failed to connect to remote LLM: {e}")
             print(f"Exception type: {type(e).__name__}")
             print(f"Full traceback:")
             traceback.print_exc()
@@ -140,13 +134,14 @@ INSTRUCTIONS:
 
         return response
     
-    def generate_response(self, question: str, conversation_history: str = "",
+    def generate_response(self, question: str, conversation_history: Optional[List[Dict]] = None,
                           verbosity: str = "detailed") -> RAGResponse:
         """Generate a response to a question using RAG.
 
         Args:
             question: The user's question
-            conversation_history: Formatted previous conversation for context
+            conversation_history: List of previous messages in OpenAI chat format
+                                  [{"role": "user", "content": "..."}, ...]
             verbosity: "concise" or "detailed" - affects response style
         """
 
@@ -180,38 +175,64 @@ INSTRUCTIONS:
             avg_distance < 0.8  # Cosine distance threshold
         )
 
-        # Step 2: Build prompt with verbosity preference
-        prompt = self._build_prompt(question, context_chunks, sources, conversation_history, verbosity)
+        # Step 2: Build system message and user message for chat API
+        context_content = "\n\n---\n\n".join(context_chunks) if context_chunks else "No relevant information found."
 
-        # Debug: Echo full prompt to console
+        # Verbosity instruction
+        if verbosity == "concise":
+            verbosity_instruction = "Be concise - give direct answers without unnecessary elaboration."
+        else:
+            verbosity_instruction = "Be thorough but focused - explain clearly without rambling."
+
+        system_content = f"""You are ZimBot, a knowledgeable assistant. You have access to the following reference information:
+
+<knowledge>
+{context_content}
+</knowledge>
+
+INSTRUCTIONS:
+- Use this knowledge naturally to answer questions, as if you already knew it
+- Do NOT say "according to the context", "the passage states", "based on the information provided", or similar phrases
+- Do NOT summarize or report on the knowledge - use it to directly answer the question
+- If the knowledge doesn't cover the question, say so honestly
+- {verbosity_instruction}"""
+
+        # Build messages array with proper chat format
+        messages = [{"role": "system", "content": system_content}]
+
+        # Add conversation history as proper chat messages (user/assistant turns)
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        # Add the current question
+        messages.append({"role": "user", "content": question})
+
+        # Debug: Echo messages to console
         print(f"\n{'='*60}")
-        print("FULL PROMPT BEING SENT TO LLM:")
+        print("MESSAGES BEING SENT TO REMOTE LLM:")
         print(f"{'='*60}")
-        print(prompt)
+        for i, msg in enumerate(messages):
+            content_preview = msg['content'][:300] + "..." if len(msg['content']) > 300 else msg['content']
+            print(f"[{i}] {msg['role']}: {content_preview}")
         print(f"{'='*60}\n")
 
-        # Step 3: Generate response using LLM
-        print(f"Generating response with LLM...")
+        # Step 3: Generate response using remote LLM
+        print(f"Generating response with remote LLM...")
         llm_start = time.time()
+        tokens_used = 0
 
         try:
-            response = self.llm(
-                prompt=prompt,
+            llm_output = self.llm.chat(
+                messages=messages,
                 max_tokens=self.config.max_tokens,
                 temperature=0.5,
-                top_p=0.9,
-                echo=False,
                 stop=["<|im_end|>", "<|im_start|>"]
             )
-
-            llm_output = response['choices'][0]['text']
-            tokens_used = response['usage']['total_tokens']
-            print(f"  LLM inference took {time.time() - llm_start:.2f}s ({tokens_used} tokens)")
+            print(f"  LLM inference took {time.time() - llm_start:.2f}s")
 
         except Exception as e:
             print(f"LLM generation failed: {e}")
             llm_output = f"Sorry, I encountered an error while processing your question: {str(e)}"
-            tokens_used = 0
 
         # Step 4: Format the final response
         final_response = self._format_response(llm_output, sources)
@@ -229,28 +250,33 @@ INSTRUCTIONS:
         )
     
     def get_model_info(self) -> Dict:
-        """Get information about the loaded model."""
+        """Get information about the remote LLM connection."""
         if not self.model_loaded:
             return {"status": "not_loaded"}
-        
+
         return {
-            "model_path": self.llm.model_path,
-            "n_ctx": self.llm.n_ctx,
-            "n_threads": self.llm.n_threads,
-            "model_loaded": self.model_loaded
+            "remote_url": self.config.llm_url,
+            "timeout": self.config.llm_timeout,
+            "model_loaded": self.model_loaded,
+            "type": "remote_lmstudio"
         }
     
     def health_check(self) -> Dict:
         """Perform a health check of the RAG engine."""
-        
-        # Check if model is loaded
-        model_status = "loaded" if self.model_loaded else "not_loaded"
-        
+
+        # Check remote LLM connection
+        if self.llm:
+            llm_healthy = self.llm.health_check()
+            model_status = "connected" if llm_healthy else "disconnected"
+        else:
+            model_status = "not_initialized"
+
         # Check indexer status
         indexer_info = self.indexer.get_collection_info()
-        
+
         return {
             "model_status": model_status,
+            "remote_url": self.config.llm_url,
             "indexer_status": indexer_info,
             "config": {
                 "max_tokens": self.config.max_tokens,

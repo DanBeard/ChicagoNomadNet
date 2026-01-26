@@ -3,6 +3,8 @@ ZIM Indexer
 
 Handles loading ZIM archives, extracting text content, chunking, embedding,
 and storing in SQLite with sqlite-vec for vector similarity search.
+
+Supports both local (SentenceTransformer) and remote (LMStudio) embeddings.
 """
 
 import os
@@ -15,10 +17,9 @@ import threading
 import queue
 import time
 from dataclasses import dataclass
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict, Set, Tuple, Optional, Union
 
 import sqlite_vec
-from sentence_transformers import SentenceTransformer
 
 # zimfast is required - no fallback to slow zimscan
 # Installed as standalone module via: pip install -e projects/zimbot/zimfast/
@@ -26,6 +27,11 @@ from zimfast import ZimReader as ZimFastReader
 
 from .config import ZimBotConfig
 from .faiss_index import FAISSIndex
+
+# Import remote embedding client
+import sys
+sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from shared.remote_inference import RemoteEmbedding
 
 
 @dataclass
@@ -135,7 +141,9 @@ class ZIMIndexer:
         self.use_faiss = True  # Use FAISS if available, fallback to sqlite-vec
 
         # Threading state
-        self.model: Optional[SentenceTransformer] = None
+        # Model can be either SentenceTransformer (local) or RemoteEmbedding (remote)
+        self.model: Optional[Union["SentenceTransformer", RemoteEmbedding]] = None
+        self.use_remote_embeddings = config.use_remote_inference
         self.raw_queue: Optional[queue.Queue] = None
         self.chunk_queue: Optional[queue.Queue] = None
         self.shutdown_event = threading.Event()
@@ -501,9 +509,7 @@ class ZIMIndexer:
 
         # Load embedding model
         if self.model is None:
-            print(f"Loading embedding model: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
-            print("Model loaded.")
+            self._init_model()
 
         print(f"Indexing {len(archives_to_index)} archive(s)...")
 
@@ -703,8 +709,7 @@ class ZIMIndexer:
 
         # Ensure model is loaded for query embedding
         if self.model is None:
-            print(f"Loading embedding model for search: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
+            self._init_model()
 
         # Generate query embedding
         embed_start = time.time()
@@ -828,8 +833,7 @@ class ZIMIndexer:
 
         # Ensure model is loaded
         if self.model is None:
-            print(f"Loading embedding model: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
+            self._init_model()
 
         # Extract text if HTML
         if '<html' in content.lower() or '<body' in content.lower():
@@ -898,11 +902,34 @@ class ZIMIndexer:
     # ========== Threaded Indexing Methods ==========
 
     def _init_model(self):
-        """Initialize sentence-transformer model (lazy loading)."""
+        """Initialize embedding model (lazy loading).
+
+        Uses remote LMStudio server if use_remote_inference is enabled,
+        otherwise loads local SentenceTransformer model.
+        """
         if self.model is None:
-            print(f"Loading embedding model: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
-            print("Model loaded.")
+            if self.use_remote_embeddings:
+                print(f"Connecting to remote embedding server: {self.config.embedding_url}")
+                self.model = RemoteEmbedding(
+                    base_url=self.config.embedding_url,
+                    model=self.config.embedding_remote_model,
+                    timeout=60
+                )
+                if self.model.health_check():
+                    print(f"Remote embedding server connected (model: {self.config.embedding_remote_model})")
+                else:
+                    print(f"Warning: Remote embedding server not responding, falling back to local")
+                    self.use_remote_embeddings = False
+                    self._init_local_model()
+            else:
+                self._init_local_model()
+
+    def _init_local_model(self):
+        """Initialize local SentenceTransformer model."""
+        from sentence_transformers import SentenceTransformer
+        print(f"Loading local embedding model: {self.config.embedding_model}")
+        self.model = SentenceTransformer(self.config.embedding_model)
+        print("Local model loaded.")
 
     def _reader_thread_zimfast(self, filepath: str, archive_name: str,
                                  start_idx: int, end_idx: int, reader_id: int):
